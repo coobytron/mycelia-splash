@@ -1,4 +1,4 @@
-# Mycelia — AI Tooling Splash Page
+# Mycelia
 
 A standalone WebGL splash page for an Art Director portfolio site.
 
