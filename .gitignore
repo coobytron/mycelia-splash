@@ -1,4 +1,36 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Backups
+*.bak
+*.backup
+*.tmp
+*.old
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Node / web tooling
 node_modules/
 dist/
-.env
+build/
+.cache/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
