@@ -57,8 +57,8 @@
     font-size:clamp(42px,8vw,94px);line-height:.98;letter-spacing:-.02em;font-weight:600;font-kerning:normal;
     text-wrap:balance;color:#f2fffd;text-shadow:0 0 28px rgba(53,224,216,.12), 0 18px 70px rgba(0,0,0,.48);
   }
-  .splash-title .glow{color:#ffe7d1;
-    text-shadow:0 0 14px rgba(255,150,60,.6), 0 0 44px rgba(255,120,30,.4), 0 0 90px rgba(255,90,20,.22);}
+  .splash-title .glow{color:#bd6a26;
+    text-shadow:0 0 12px rgba(130,40,0,.85), 0 0 42px rgba(85,24,0,.6), 0 0 95px rgba(50,14,0,.4);}
   .splash-subtitle{
     max-width:620px;margin:22px 0 0;color:#d8e9e7;font-size:clamp(18px,2.2vw,24px);
     line-height:1.3;letter-spacing:-.02em;text-shadow:0 10px 40px rgba(0,0,0,.42);
@@ -205,7 +205,6 @@
 <section id="splash" aria-labelledby="splashTitle">
   <div class="splash-layout">
     <div class="splash-copy">
-      <p class="splash-eyebrow">Mycelia · Interactive AI Tooling</p>
       <h1 class="splash-title" id="splashTitle">Hi, I’m an <span class="glow">Art Director</span><br>utilizing <span class="glow">AI</span> to create tooling.</h1>
       <p class="splash-subtitle">Exploring custom visual systems, generative interfaces, and design tools built for real-time creative control.</p>
     </div>
@@ -280,8 +279,8 @@
 
   <div class="section">
     <h3>Render</h3>
-    <div class="shelf">Art Style</div>
-    <div class="chips" id="styleChips"></div>
+    <div class="shelf">Mood</div>
+    <div class="chips" id="moodChips"></div>
     <div class="row" id="ditherRow">
       <label>Dither <b id="vDither">0.06</b></label>
       <input type="range" id="dither" min="0" max="0.2" step="0.005" value="0.06">
@@ -293,6 +292,22 @@
     <div class="colorrow"><span>Atmosphere</span><input type="color" id="fogColor" value="#0e3b46"></div>
     <div class="btns">
       <div class="btn glow" id="aoBtn">Ambient Occlusion: On</div>
+    </div>
+    <div class="btns">
+      <div class="btn" id="godBtn">God Rays: Off</div>
+      <div class="btn" id="dofBtn">Depth of Field: Off</div>
+    </div>
+    <div class="btns">
+      <div class="btn" id="celBtn">Cel Look: Off</div>
+      <div class="btn" id="wetBtn">Wet Floor: Off</div>
+    </div>
+    <div class="row" id="focusRow">
+      <label>Focus Offset <b id="vFocus">0.0</b></label>
+      <input type="range" id="focus" min="-8" max="8" step="0.5" value="0">
+    </div>
+    <div class="row" id="blurRow">
+      <label>DoF Blur <b id="vBlur">0.005</b></label>
+      <input type="range" id="blur" min="0" max="0.02" step="0.001" value="0.005">
     </div>
   </div>
 
@@ -317,7 +332,6 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
-import { GLTFLoader }      from 'three/addons/loaders/GLTFLoader.js';
 
 /* ============================================================= *
  * 5. CONSTANTS
@@ -835,26 +849,74 @@ function buildFlower(glowHex){
   return grp;
 }
 
-/* ---- THE GARDENER — a laptop rig (deck + emissive screen + face light) that hosts the
- * real self-portrait .glb (loaded async in §11). The screen light is the storytelling beat. */
-const HERO_MODEL_URL='Meshy_AI_Self_Portrait_in_a_Cl_0703065905_texture.glb';
+/* ---- THE GARDENER — a low-poly figure sitting cross-legged, face lit by a laptop.
+ * The quiet human at the centre of the generative garden (art director + AI).      */
 function buildHero(){
   const grp=new THREE.Group();
   const box=(w,h,d)=>new THREE.BoxGeometry(w,h,d);
-  // laptop sits on the lap, in front of the seated figure — deck + hinged emissive screen
-  const lap=new THREE.Group();
-  const alu=new THREE.MeshStandardMaterial({color:0x0c1013,roughness:.4,metalness:.5});
-  const deck=new THREE.Mesh(box(.52,.03,.36),alu); lap.add(deck);
+  const skin=()=>new THREE.MeshStandardMaterial({color:0x3a4048,roughness:.72,metalness:0,
+    emissive:0x1c3038,emissiveIntensity:.4,flatShading:true});   // keeps facial form under bloom while screen light reads
+  const body=()=>new THREE.MeshStandardMaterial({color:0x141a22,roughness:.85,metalness:0,
+    emissive:0x0a1016,emissiveIntensity:.2,flatShading:true});
+  const add=(geo,mat,x,y,z,rx=0,ry=0,rz=0)=>{ const m=new THREE.Mesh(geo,mat);
+    m.position.set(x,y,z); m.rotation.set(rx,ry,rz); m.castShadow=true; grp.add(m); return m; };
+
+  const bodyMat=body(), skinMat=skin();
+  // crossed legs — two flattened shins forming a triangular base
+  add(box(.86,.17,.24), bodyMat,  .0,.11, .18,  0, .38, 0);
+  add(box(.86,.17,.24), bodyMat,  .0,.11, .18,  0,-.38, 0);
+  add(box(.5,.22,.42),  bodyMat,  .0,.2,  -.02);                 // hips / seat
+  // torso leaning forward over the lap
+  const torso=add(box(.44,.6,.3), bodyMat, .0,.56, .02,  .2,0,0);
+  // shoulders + arms reaching down to the keyboard
+  add(box(.5,.15,.22),  bodyMat,  .0,.82, .06,  .12,0,0);
+  add(box(.13,.44,.14), skinMat,  .26,.62, .2,  -.7,0,.16);
+  add(box(.13,.44,.14), skinMat, -.26,.62, .2,  -.7,0,-.16);
+  // neck
+  add(box(.13,.14,.12), skinMat, .0,.9,.05);
+  // head group — tilts down toward the screen; hair + glasses ride along
+  const headGrp=new THREE.Group(); headGrp.position.set(0,1.0,.06); headGrp.rotation.x=.34; grp.add(headGrp);
+  const hairMat=new THREE.MeshStandardMaterial({color:0x2a1a12,roughness:.9,metalness:0,
+    emissive:0x0b0806,emissiveIntensity:.3,flatShading:true});
+  const hadd=(geo,mat,x,y,z,rx=0,ry=0,rz=0)=>{ const m=new THREE.Mesh(geo,mat);
+    m.position.set(x,y,z); m.rotation.set(rx,ry,rz); m.castShadow=true; headGrp.add(m); return m; };
+  hadd(new THREE.IcosahedronGeometry(.2,0), skinMat, 0,.08,.02);                 // head
+  const crown=hadd(new THREE.IcosahedronGeometry(.225,0), hairMat, 0,.12,-.03); crown.scale.set(1.05,1.0,1.12); // hair crown
+  hadd(box(.42,.3,.26), hairMat, 0,.0,-.12);                                     // hair falling down the back
+  // glasses — two rims + bridge, catching the screen glow
+  const frameMat=new THREE.MeshStandardMaterial({color:0x0a0d10,roughness:.35,metalness:.6,
+    emissive:0x1b2b34,emissiveIntensity:.6,flatShading:true});
+  hadd(new THREE.TorusGeometry(.058,.02,7,16), frameMat, -.08,.03,.185);
+  hadd(new THREE.TorusGeometry(.058,.02,7,16), frameMat,  .08,.03,.185);
+  hadd(box(.06,.016,.016), frameMat, 0,.04,.19);                                 // bridge
+  const lensMat=new THREE.MeshStandardMaterial({color:0x0a1418,emissive:0x7fc8ff,
+    emissiveIntensity:1.2,transparent:true,opacity:.4,roughness:.1,metalness:0});
+  hadd(new THREE.CircleGeometry(.05,12), lensMat, -.08,.03,.182);
+  hadd(new THREE.CircleGeometry(.05,12), lensMat,  .08,.03,.182);
+  // two long braids hanging down the front
+  const tieMat=new THREE.MeshStandardMaterial({color:0x6a2f4a,roughness:.8,emissive:0x1a060f,emissiveIntensity:.3,flatShading:true});
+  [-1,1].forEach(s=>{
+    const b=new THREE.Group(); b.position.set(s*.2,.94,.14); b.rotation.set(.12,0,-s*.14);
+    for(let k=0;k<4;k++){ const seg=new THREE.Mesh(new THREE.IcosahedronGeometry(.058-k*.008,0), hairMat);
+      seg.position.y=-k*.17; seg.scale.set(1,1.3,1); seg.castShadow=true; b.add(seg); }        // plaited segments
+    const tie=new THREE.Mesh(new THREE.CylinderGeometry(.036,.036,.045,6), tieMat); tie.position.y=-.7; b.add(tie);
+    const tip=new THREE.Mesh(new THREE.IcosahedronGeometry(.03,0), hairMat); tip.position.y=-.77; b.add(tip);
+    grp.add(b);
+  });
+
+  // laptop on the lap — base + hinged emissive screen throwing light up onto the face
+  const alu=new THREE.MeshStandardMaterial({color:0x0c1013,roughness:.4,metalness:.5,flatShading:true});
+  add(box(.4,.028,.28), alu, .0,.4, .34);                        // keyboard deck
   const screenMat=new THREE.MeshStandardMaterial({color:0x0a0f14,emissive:0x9fdcff,
-    emissiveIntensity:2.4,roughness:.3,metalness:0});
-  screenMat.userData.baseEI=2.4;
-  const screen=new THREE.Mesh(box(.52,.34,.02),screenMat); screen.position.set(0,.2,-.18); screen.rotation.x=-1.15; lap.add(screen);
-  lap.position.set(0,.74,.5);          // lap height / forward — tuned once the model loads
-  grp.add(lap);
-  // the money shot: a soft cool light thrown up from the screen onto the face/chest
-  const glow=new THREE.PointLight(0xa9d8ff, 7.0, 4.5, 2.0);
-  glow.position.set(0,1.05,.42); grp.add(glow);
-  grp.userData={screen:screenMat, glow, lap, model:null};
+    emissiveIntensity:2.2,roughness:.3,metalness:0});
+  const screen=add(box(.4,.28,.02), screenMat, .0,.55,.48, -1.12,0,0);   // lid, tilted back
+  screenMat.userData.baseEI=2.2;
+
+  // the money shot: a soft cool light from the screen onto the face/chest
+  const glow=new THREE.PointLight(0xa9d8ff, 6.5, 3.2, 2.2);
+  glow.position.set(0,.66,.42); grp.add(glow);
+
+  grp.userData={screen:screenMat, glow, head:headGrp, torso};
   return grp;
 }
 
@@ -1274,7 +1336,7 @@ function updateCrtTex(){
  * 10. PARTICLE SYSTEM (spore motes)
  * ============================================================= */
 class ParticleSystem {
-  constructor(scene, max=1400, ambient=320){
+  constructor(scene, max=1400, ambient=0){   // ambient dust removed — Points don't write depth, so DoF flickered them every frame
     this.max=max; this.ambient=ambient;
     this.pos=new Float32Array(max*3);
     this.vel=new Float32Array(max*3);
@@ -1283,7 +1345,7 @@ class ParticleSystem {
     const geo=new THREE.BufferGeometry();
     geo.setAttribute('position',new THREE.BufferAttribute(this.pos,3).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('color',   new THREE.BufferAttribute(this.col,3).setUsage(THREE.DynamicDrawUsage));
-    const mat=new THREE.PointsMaterial({size:0.07,map:makeSoftDot(),transparent:true,
+    const mat=new THREE.PointsMaterial({size:0.055,map:makeSoftDot(),transparent:true,
       opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false,vertexColors:true,
       sizeAttenuation:true});
     this.points=new THREE.Points(geo,mat); this.points.frustumCulled=false;
@@ -1413,7 +1475,7 @@ void main(){vH=uv.y; vec3 p=position;
 void main(){float h=vH*vH;
   vec3 col=mix(vec3(0.015,0.065,0.03),vec3(0.10,0.80,0.55)*uNightGlow,h);
   gl_FragColor=vec4(col,mix(0.88,0.30,vH));}`,
-  transparent:true,side:THREE.DoubleSide,depthWrite:false});
+  transparent:true,side:THREE.DoubleSide,depthWrite:true});   // depthWrite ON so depth-of-field blurs grass by its true distance (no swim)
 const grassMesh=new THREE.Mesh(grassBladeGeo,grassMat);
 grassMesh.position.y=0.001; grassMesh.frustumCulled=false; scene.add(grassMesh);
 
@@ -1516,28 +1578,10 @@ crtPlane.position.y=0.08; crtPlane.renderOrder=-1; scene.add(crtPlane);
 // ── THE GARDENER — seated at the heart of the garden, face lit by the laptop ──
 const hero=buildHero();
 hero.position.set(0,getHeightAt(0,0),0);
-hero.rotation.y=0;                  // flip toward camera once we see which way the model faces
+hero.scale.setScalar(2.0);          // a clear centrepiece — reads from the garden camera
+hero.rotation.y=Math.PI+0.35;       // face + laptop lid angle up toward the (0,9,15) camera, slight yaw
 scene.add(hero);
 const heroScreen=hero.userData.screen, heroGlow=hero.userData.glow;
-
-// load the real self-portrait and seat it at the centre (async — laptop/light already live)
-new GLTFLoader().load(HERO_MODEL_URL, (gltf)=>{
-  const model=gltf.scene;
-  model.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
-  // normalise: scale to a seated target height, feet on the ground, centred on x/z
-  const box0=new THREE.Box3().setFromObject(model), size=new THREE.Vector3(); box0.getSize(size);
-  const HERO_TARGET_H=2.4;
-  model.scale.setScalar(HERO_TARGET_H/Math.max(0.001,size.y));
-  const box1=new THREE.Box3().setFromObject(model), c=new THREE.Vector3(); box1.getCenter(c);
-  model.position.x-=c.x; model.position.z-=c.z; model.position.y-=box1.min.y;
-  model.userData.baseY=model.position.y;
-  hero.add(model); hero.userData.model=model;
-  if(styleFlat) flattenGroup(model,true);
-  needsRender=true;
-}, undefined, (err)=>{
-  console.warn('Gardener model failed to load — if opened via file://, some browsers block local .glb. '
-    +'Run a local server in the mushroom sim folder (python3 -m http.server) and open http://localhost:8000/. Error:', err);
-});
 
 // shared reaction-diffusion texture sampled by every cap shader (§8b)
 seedRD();
@@ -1553,51 +1597,58 @@ controls.maxPolarAngle=Math.PI*0.49; controls.minDistance=2; controls.maxDistanc
 controls.target.set(0,0.8,0);
 
 const composer=new EffectComposer(renderer);
+// EffectComposer bypasses the canvas's built-in MSAA → thin grass/edges shimmer. Re-enable it on the ping-pong buffers.
+if(renderer.capabilities.isWebGL2){ composer.renderTarget1.samples=4; composer.renderTarget2.samples=4; }
 composer.addPass(new RenderPass(scene,camera));
 const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),0.55,0.4,0.85); // strength,radius,threshold — high threshold so only hot cores bloom
 composer.addPass(bloom);
+// god-rays — radial light-scattering toward the sun/moon, additive + luminance-gated (only bright pixels cast shafts)
+const GodRayShader={
+  uniforms:{ tDiffuse:{value:null}, uLightPos:{value:new THREE.Vector2(0.5,0.85)}, uStrength:{value:0.0} },
+  vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`precision highp float;
+    uniform sampler2D tDiffuse; uniform vec2 uLightPos; uniform float uStrength; varying vec2 vUv;
+    void main(){
+      vec3 base=texture2D(tDiffuse,vUv).rgb;
+      if(uStrength<=0.001){ gl_FragColor=vec4(base,1.0); return; }
+      vec2 d=(uLightPos-vUv)/24.0*0.92;
+      vec2 uv=vUv; float decay=1.0; vec3 acc=vec3(0.0);
+      for(int i=0;i<24;i++){
+        uv+=d;
+        vec3 s=texture2D(tDiffuse, clamp(uv,0.0,1.0)).rgb;
+        float b=max(0.0, max(s.r,max(s.g,s.b))-0.88);   // only genuinely bright sources cast shafts (excludes glowing grass → no scintillation)
+        acc+=s*b*decay; decay*=0.955;
+      }
+      gl_FragColor=vec4(base + acc/24.0*uStrength, 1.0);
+    }`
+};
+const godPass=new ShaderPass(GodRayShader);
+composer.addPass(godPass);
 composer.addPass(new OutputPass());
 bloom.setSize(innerWidth*0.5, innerHeight*0.5);   // half-res bloom: ~4x cheaper, looks identical (softer)
 
-// final art-direction pass — selectable style (Bayer / Halftone / Splatter / Low-poly)
-// + a global fog-colour grade that unifies the whole frame into one soft atmosphere
+// final grade pass — subtle film grain + optional Cel look + a global fog-colour grade
 const StyleShader={
   uniforms:{ tDiffuse:{value:null}, uBayer:{value:makeBayerTexture()}, uAmount:{value:0.06},
-             uStyle:{value:0}, uTint:{value:NIGHT_FOG.clone()}, uTintAmt:{value:0.2}, uNight:{value:1},
+             uTint:{value:NIGHT_FOG.clone()}, uTintAmt:{value:0.2}, uNight:{value:1}, uCel:{value:0},
              uResolution:{value:new THREE.Vector2(innerWidth,innerHeight)} },
   vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
   fragmentShader:`precision highp float;
     uniform sampler2D tDiffuse; uniform sampler2D uBayer; uniform float uAmount;
-    uniform int uStyle; uniform vec3 uTint; uniform float uTintAmt; uniform float uNight; uniform vec2 uResolution; varying vec2 vUv;
-    float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+    uniform vec3 uTint; uniform float uTintAmt; uniform float uNight; uniform float uCel; uniform vec2 uResolution; varying vec2 vUv;
     float luma(vec3 c){ return dot(c,vec3(0.299,0.587,0.114)); }
-    mat2 rot(float a){ float s=sin(a),c=cos(a); return mat2(c,-s,s,c); }
     void main(){
       vec2 fc=gl_FragCoord.xy;
-      vec3 c=texture2D(tDiffuse,vUv).rgb;
-      vec3 outc=c;
-      if(uStyle==0){                                   // Bayer — ordered dither (default, filmic)
-        float t=texture2D(uBayer, fc/8.0).r;
-        outc=c+(t-0.5)*uAmount;
-      } else if(uStyle==1){                            // Halftone — glowing ink dots, tighten at night
-        float cell=6.0-2.0*uNight;
-        vec2 g=fract(rot(0.4)*fc/cell)-0.5;
-        float d=length(g)*2.0;
-        float r=sqrt(clamp(luma(c)*1.35,0.0,1.0));
-        outc=c*smoothstep(r, r-0.28, d);
-      } else if(uStyle==2){                            // Splatter — chunky stochastic spray (keeps blacks + glow)
-        vec2 id=floor(fc/3.0);
-        float keep=step(hash(id), pow(luma(c),0.8)+(hash(id+7.3)-0.5)*0.16);
-        outc=c*mix(0.03,1.0,keep);
-      } else {                                         // Low-Poly — luma facets w/ neighbour-sampled edges (no derivatives)
-        float lp=luma(c);
-        float ql=floor(lp*5.0+0.5)/5.0;
-        outc=c*(ql/max(lp,1e-3));
+      vec3 outc=texture2D(tDiffuse,vUv).rgb;
+      outc+=(texture2D(uBayer, fc/8.0).r-0.5)*uAmount;              // ordered Bayer grain (breaks banding)
+      if(uCel>0.5){                                                 // Cel — posterize luminance into bands + ink edges
+        float lp=luma(outc);
+        float ql=floor(lp*4.0+0.5)/4.0;
+        outc*=ql/max(lp,1e-3);
         vec2 px=1.0/uResolution;
         float lx=luma(texture2D(tDiffuse,vUv+vec2(px.x,0.0)).rgb);
         float ly=luma(texture2D(tDiffuse,vUv+vec2(0.0,px.y)).rgb);
-        float edge=smoothstep(0.05,0.14,abs(lx-lp)+abs(ly-lp));
-        outc*=1.0-(0.4+0.3*uNight)*edge;
+        outc*=1.0-0.75*smoothstep(0.05,0.15,abs(lx-lp)+abs(ly-lp));
       }
       // soft fog grade — pull the frame toward one atmospheric colour (brighter areas tint less)
       outc=mix(outc, uTint*(0.35+0.65*luma(outc)), uTintAmt);
@@ -1619,6 +1670,37 @@ import('three/addons/postprocessing/GTAOPass.js').then(({GTAOPass})=>{
     needsRender=true;
   }catch(e){ console.warn('GTAO setup failed:',e); gtao=null; }
 }).catch(e=>console.warn('GTAO unavailable:',e));
+
+// god-rays / cel state (god-rays pass already in the composer; strength driven each frame in animate)
+let godOn=false, celOn=false;
+const _prj=new THREE.Vector3();
+const HERO_FOCUS=new THREE.Vector3(0,1.2,0);          // DoF autofocuses on the gardener at world-centre
+let dofFocusOffset=0, dofBlur=0.005;
+
+// depth-of-field (BokehPass) — focus pull onto the gardener; defensive load, off by default
+let bokeh=null, dofOn=false;
+import('three/addons/postprocessing/BokehPass.js').then(({BokehPass})=>{
+  try{
+    bokeh=new BokehPass(scene,camera,{focus:16.0, aperture:0.005, maxblur:0.04});
+    bokeh.enabled=dofOn;
+    composer.insertPass(bokeh,1);     // after RenderPass (blurs the beauty), before bloom
+    needsRender=true;
+  }catch(e){ console.warn('DoF setup failed:',e); bokeh=null; }
+}).catch(e=>console.warn('BokehPass unavailable:',e));
+
+// wet reflective floor (Reflector) — additive, so only the bright bioluminescence doubles on the ground
+let wetFloor=null, wetOn=false;
+import('three/addons/objects/Reflector.js').then(({Reflector})=>{
+  try{
+    wetFloor=new Reflector(new THREE.PlaneGeometry(GROUND_SIZE,GROUND_SIZE),
+      {textureWidth:1024, textureHeight:1024, color:0x252d36});
+    wetFloor.rotation.x=-Math.PI/2; wetFloor.position.y=0.05;
+    wetFloor.material.transparent=true; wetFloor.material.blending=THREE.AdditiveBlending; wetFloor.material.depthWrite=false;
+    wetFloor.renderOrder=-1; wetFloor.visible=wetOn;
+    scene.add(wetFloor);
+    needsRender=true;
+  }catch(e){ console.warn('Wet floor setup failed:',e); wetFloor=null; }
+}).catch(e=>console.warn('Reflector unavailable:',e));
 
 const particles=new ParticleSystem(scene);
 const garden=[];
@@ -1834,32 +1916,38 @@ function syncWandererBtn(){ wandererBtn.textContent='Wanderer: '+(wandererOn?'On
 wandererBtn.onclick=()=>{ wandererOn=!wandererOn; crtSpawnTimer=99; syncWandererBtn(); scheduleSave(); needsRender=true; };
 const ditherEl=document.getElementById('dither'), vDither=document.getElementById('vDither');
 ditherEl.addEventListener('input',()=>{ ditherPass.uniforms.uAmount.value=parseFloat(ditherEl.value); vDither.textContent=parseFloat(ditherEl.value).toFixed(3); needsRender=true; scheduleSave(); });
-// art-direction style selector — Low-Poly reshapes the meshes; the rest are screen looks
-let styleMode=0, styleFlat=false;
-const STYLE_NAMES=['Bayer','Halftone','Splatter','Low-Poly'];
-const STYLE_DOTS=['#eaf6f4','#35e0d8','#0a84ff','#9dff6b'];
+// ── MOOD PRESETS — each retunes the whole scene (palette · fog · light · bloom) as one art direction ──
+let styleFlat=false;                                 // kept for the Cel toggle (added later); false under moods
 function flattenGroup(root,on){                      // toggle REAL flat-shading on a group's standard materials
   root.traverse(o=>{ const m=o.material; if(!m) return;
     (Array.isArray(m)?m:[m]).forEach(mm=>{ if(mm.isMeshStandardMaterial && mm.flatShading!==on){ mm.flatShading=on; mm.needsUpdate=true; } }); });
 }
-function applyObjectStyle(){                          // Low-Poly = faceted normals on the real meshes, not a screen filter
-  styleFlat=(styleMode===3);
-  flattenGroup(scene,styleFlat);
-  if(preview) flattenGroup(preview,styleFlat);
-}
-function setStyle(n){
-  styleMode=n; ditherPass.uniforms.uStyle.value=(n===3?0:n);   // Low-Poly drives the meshes; post stays a neutral dither+grade
-  applyObjectStyle();
-  document.querySelectorAll('#styleChips .chip').forEach((c,i)=>c.classList.toggle('on',i===n));
-  document.getElementById('ditherRow').classList.toggle('is-disabled', !(n===0||n===3));  // Dither active for Bayer & Low-Poly
+const MOODS={
+  living:  {label:'Living',    nightFog:0x07202c,dayFog:0x2a66b4,nightBg:0x03070a,dayBg:0x1b4a7a,nightHemi:0x143a44,dayHemi:0x5a90dc,density:0.05, bloomN:0.60,bloomD:0.35,tint:0.20,dot:'#35e0d8',pin:null},
+  night:   {label:'Biolume',   nightFog:0x04141d,dayFog:0x0a2634,nightBg:0x01050a,dayBg:0x061a26,nightHemi:0x0e2c36,dayHemi:0x1a4450,density:0.055,bloomN:0.80,bloomD:0.62,tint:0.20,dot:'#35e0d8',pin:0.96},
+  dawn:    {label:'Misty Dawn',nightFog:0x37596b,dayFog:0xaac2d2,nightBg:0x1c3a4a,dayBg:0x8fb0c4,nightHemi:0x5a7b8a,dayHemi:0xaecfe0,density:0.095,bloomN:0.45,bloomD:0.30,tint:0.30,dot:'#bcd8e6',pin:0.34},
+  dusk:    {label:'Ember Dusk',nightFog:0x3a1626,dayFog:0xcf5f2c,nightBg:0x1a0a14,dayBg:0x742d1c,nightHemi:0x4a2230,dayHemi:0xd67a44,density:0.07, bloomN:0.68,bloomD:0.52,tint:0.26,dot:'#ff9a4d',pin:0.62},
+  overcast:{label:'Overcast',  nightFog:0x2b3742,dayFog:0x93a2ad,nightBg:0x151d24,dayBg:0x6f7f8b,nightHemi:0x3c4954,dayHemi:0xa2b2bd,density:0.085,bloomN:0.30,bloomD:0.20,tint:0.32,dot:'#aab6c0',pin:0.5},
+};
+const MOOD_ORDER=['living','night','dawn','dusk','overcast'];
+let mood='living', moodPin=null, moodBloomN=0.6, moodBloomD=0.35;
+function applyMood(name){
+  const M=MOODS[name]||MOODS.living; mood=MOODS[name]?name:'living';
+  NIGHT_FOG.set(M.nightFog); DAY_FOG.set(M.dayFog);
+  NIGHT_BG.set(M.nightBg);   DAY_BG.set(M.dayBg);
+  NIGHT_HEMI.set(M.nightHemi); DAY_HEMI.set(M.dayHemi);
+  scene.fog.density=M.density; moodBloomN=M.bloomN; moodBloomD=M.bloomD; moodPin=M.pin;
+  ditherPass.uniforms.uTintAmt.value=M.tint;
+  const fs=document.getElementById('fog'); if(fs){ fs.value=M.tint; document.getElementById('vFog').textContent=M.tint.toFixed(2); }
+  document.querySelectorAll('#moodChips .chip').forEach((c,i)=>c.classList.toggle('on',MOOD_ORDER[i]===mood));
   needsRender=true; scheduleSave();
 }
-(function buildStyleChips(){
-  const host=document.getElementById('styleChips');
-  STYLE_NAMES.forEach((name,i)=>{ const chip=document.createElement('div');
-    chip.className='chip'+(i===0?' on':'');
-    const d=document.createElement('span'); d.className='dot'; d.style.color=STYLE_DOTS[i];
-    chip.append(d,document.createTextNode(name)); chip.onclick=()=>setStyle(i); host.appendChild(chip); });
+(function buildMoodChips(){
+  const host=document.getElementById('moodChips'); if(!host) return;
+  MOOD_ORDER.forEach(k=>{ const M=MOODS[k]; const chip=document.createElement('div');
+    chip.className='chip'+(k===mood?' on':'');
+    const d=document.createElement('span'); d.className='dot'; d.style.color=M.dot;
+    chip.append(d,document.createTextNode(M.label)); chip.onclick=()=>applyMood(k); host.appendChild(chip); });
 })();
 // soft global fog-diffusion grade (colour auto-breathes with time-of-day until you pick a colour)
 let fogAuto=true;
@@ -1870,6 +1958,26 @@ fogColorEl.addEventListener('input',()=>{ fogAuto=false; ditherPass.uniforms.uTi
 const aoBtn=document.getElementById('aoBtn');
 function syncAoBtn(){ aoBtn.textContent='Ambient Occlusion: '+(aoOn?'On':'Off'); aoBtn.classList.toggle('glow',aoOn); }
 aoBtn.onclick=()=>{ aoOn=!aoOn; if(gtao) gtao.enabled=aoOn; syncAoBtn(); needsRender=true; scheduleSave(); };
+const godBtn=document.getElementById('godBtn');
+function syncGodBtn(){ godBtn.textContent='God Rays: '+(godOn?'On':'Off'); godBtn.classList.toggle('glow',godOn); }
+godBtn.onclick=()=>{ godOn=!godOn; if(!godOn) godPass.uniforms.uStrength.value=0; syncGodBtn(); needsRender=true; scheduleSave(); };
+const dofBtn=document.getElementById('dofBtn');
+const focusEl=document.getElementById('focus'), vFocus=document.getElementById('vFocus');
+const blurEl=document.getElementById('blur'), vBlur=document.getElementById('vBlur');
+function syncDofBtn(){ dofBtn.textContent='Depth of Field: '+(dofOn?'On':'Off'); dofBtn.classList.toggle('glow',dofOn);
+  document.getElementById('focusRow').classList.toggle('is-disabled',!dofOn);
+  document.getElementById('blurRow').classList.toggle('is-disabled',!dofOn); }
+dofBtn.onclick=()=>{ dofOn=!dofOn; if(bokeh) bokeh.enabled=dofOn; syncDofBtn(); needsRender=true; scheduleSave(); };
+focusEl.addEventListener('input',()=>{ dofFocusOffset=parseFloat(focusEl.value); vFocus.textContent=dofFocusOffset.toFixed(1); needsRender=true; scheduleSave(); });
+blurEl.addEventListener('input',()=>{ dofBlur=parseFloat(blurEl.value); vBlur.textContent=dofBlur.toFixed(3); if(bokeh) bokeh.uniforms.aperture.value=dofBlur; needsRender=true; scheduleSave(); });
+syncDofBtn();   // init: DoF rows greyed while off
+const celBtn=document.getElementById('celBtn');
+function syncCelBtn(){ celBtn.textContent='Cel Look: '+(celOn?'On':'Off'); celBtn.classList.toggle('glow',celOn); }
+celBtn.onclick=()=>{ celOn=!celOn; ditherPass.uniforms.uCel.value=celOn?1:0; styleFlat=celOn;
+  flattenGroup(scene,celOn); if(preview) flattenGroup(preview,celOn); syncCelBtn(); needsRender=true; scheduleSave(); };
+const wetBtn=document.getElementById('wetBtn');
+function syncWetBtn(){ wetBtn.textContent='Wet Floor: '+(wetOn?'On':'Off'); wetBtn.classList.toggle('glow',wetOn); }
+wetBtn.onclick=()=>{ wetOn=!wetOn; if(wetFloor) wetFloor.visible=wetOn; syncWetBtn(); needsRender=true; scheduleSave(); };
 document.getElementById('saveStrainBtn').onclick=()=>{
   const name=prompt('Name this strain:','Strain '+(presets.length+1)); if(!name) return;
   presets.push({name, genome:cloneGenome(genome)}); buildPresetChips(); scheduleSave(); toast('Saved "'+name+'"');
@@ -2144,8 +2252,9 @@ function animate(now){
   }
 
   // circadian day/night from sim time
-  const tod=(simClock.t % world.dayLen)/world.dayLen;
-  world.night=0.5+0.5*Math.cos(tod*Math.PI*2);        // 1 at midnight, 0 at noon
+  let tod=(simClock.t % world.dayLen)/world.dayLen;
+  if(moodPin!==null){ world.night=moodPin; tod=Math.acos(clamp(2*moodPin-1,-1,1))/(Math.PI*2); }  // pinned mood freezes time-of-day
+  else world.night=0.5+0.5*Math.cos(tod*Math.PI*2);   // 1 at midnight, 0 at noon
   world.nightGlow=lerp(0.5,1.0,world.night);
   scene.background.copy(NIGHT_BG).lerp(DAY_BG,1-world.night);
   scene.fog.color.copy(NIGHT_FOG).lerp(DAY_FOG,1-world.night);   // atmosphere warms toward day
@@ -2154,7 +2263,7 @@ function animate(now){
   key.intensity=lerp(0.55,0.06,world.night);
   hemi.intensity=lerp(0.72,0.30,world.night);
   hemi.color.copy(NIGHT_HEMI).lerp(DAY_HEMI,1-world.night);      // ambient light itself goes blue by day
-  bloom.strength=lerp(0.35,0.6,world.night);
+  bloom.strength=lerp(moodBloomD,moodBloomN,world.night);
   // procedural sun + moon
   const sunA=tod*Math.PI*2, sunElev=-Math.cos(sunA);
   sunSprite.position.set(Math.sin(sunA)*20, sunElev*52, -35);
@@ -2163,6 +2272,18 @@ function animate(now){
   moonSprite.position.set(-Math.sin(sunA)*14,-sunElev*46,-35);
   moonSprite.material.opacity=Math.max(0,-sunElev)*0.85;
   key.position.set(Math.sin(sunA)*5,Math.max(1.5,sunElev*11),Math.cos(sunA)*3+2);
+  if(godOn){                                            // aim the light shafts at whichever luminary is up
+    const src=(sunSprite.material.opacity>=moonSprite.material.opacity)?sunSprite:moonSprite;
+    _prj.copy(src.position).project(camera);
+    const u=_prj.x*0.5+0.5, v=_prj.y*0.5+0.5;
+    const onscreen=(_prj.z<1 && u>-0.3&&u<1.3&&v>-0.3&&v<1.3);   // no shafts when the source is behind/off camera
+    godPass.uniforms.uLightPos.value.set(u,v);
+    godPass.uniforms.uStrength.value=(onscreen? src.material.opacity:0)*0.6;
+  }
+  if(dofOn && bokeh){                                   // autofocus locked to the gardener; slider drives aperture (blur strength)
+    bokeh.uniforms.focus.value=Math.max(1, camera.position.distanceTo(HERO_FOCUS)+dofFocusOffset);
+    bokeh.uniforms.aperture.value=dofBlur;
+  }
 
   if(camAnimating){
     camera.position.lerp(camTarget.pos,0.06); controls.target.lerp(camTarget.tgt,0.06);
@@ -2178,9 +2299,9 @@ function animate(now){
     // gardener: laptop screen typing-flicker + gentle breathing
     const flick=0.85+0.15*Math.sin(now*0.019)+0.06*Math.sin(now*0.13);
     heroScreen.emissiveIntensity=heroScreen.userData.baseEI*flick;
-    heroGlow.intensity=7.0*flick;
-    const hMdl=hero.userData.model;
-    if(hMdl) hMdl.rotation.x=0.012*Math.sin(now*0.0016);                     // gentle breathing on the seated model
+    heroGlow.intensity=6.5*flick;
+    hero.userData.torso.rotation.x=0.2+0.03*Math.sin(now*0.0016);            // visible breathing
+    hero.userData.head.rotation.x=0.34+0.02*Math.sin(now*0.0016+0.6);        // subtle head-bob over the screen
     if(mycDirty||live){ updateMycTex(); mycDirty=false; }
     if(crtDirty||(live&&crtActive)){ updateCrtTex(); crtDirty=false; }
     // reaction-diffusion cap patterns: advance the shared sim only when a specimen uses it (§8b)
@@ -2211,7 +2332,7 @@ addEventListener('resize',()=>{
  * ============================================================= */
 function serialize(){
   return { genome, presets, audioWanted, dayLen:world.dayLen, mycReach, mycBranch, softPop, wandererOn, ditherAmt:ditherPass.uniforms.uAmount.value, aoOn,
-    styleMode, fogAuto, fogAmt:ditherPass.uniforms.uTintAmt.value, fogColor:'#'+ditherPass.uniforms.uTint.value.getHexString(), garden: garden.map(m=>({
+    mood, godOn, dofOn, celOn, wetOn, dofFocusOffset, dofBlur, fogAuto, fogAmt:ditherPass.uniforms.uTintAmt.value, fogColor:'#'+ditherPass.uniforms.uTint.value.getHexString(), garden: garden.map(m=>({
     genome:m.genome, position:m.group.position.toArray(), rotation:m.group.rotation.y,
     baseScale:m.baseScale, age:m.age })) };
 }
@@ -2235,7 +2356,14 @@ function hydrate(data){
   if(typeof data.ditherAmt==='number'){ ditherPass.uniforms.uAmount.value=data.ditherAmt; const el=document.getElementById('dither');
     if(el){ el.value=data.ditherAmt; document.getElementById('vDither').textContent=data.ditherAmt.toFixed(3); } }
   if(typeof data.aoOn==='boolean'){ aoOn=data.aoOn; if(gtao) gtao.enabled=aoOn; syncAoBtn(); }
-  if(typeof data.styleMode==='number') setStyle(data.styleMode);
+  applyMood(typeof data.mood==='string'?data.mood:'living');
+  godOn=!!data.godOn; if(!godOn&&godPass) godPass.uniforms.uStrength.value=0; syncGodBtn();
+  dofOn=!!data.dofOn; if(bokeh) bokeh.enabled=dofOn;
+  if(typeof data.dofFocusOffset==='number'){ dofFocusOffset=data.dofFocusOffset; const el=document.getElementById('focus'); if(el){ el.value=dofFocusOffset; document.getElementById('vFocus').textContent=dofFocusOffset.toFixed(1); } }
+  if(typeof data.dofBlur==='number'){ dofBlur=data.dofBlur; if(bokeh) bokeh.uniforms.aperture.value=dofBlur; const el=document.getElementById('blur'); if(el){ el.value=dofBlur; document.getElementById('vBlur').textContent=dofBlur.toFixed(3); } }
+  syncDofBtn();
+  celOn=!!data.celOn; ditherPass.uniforms.uCel.value=celOn?1:0; styleFlat=celOn; flattenGroup(scene,celOn); syncCelBtn();
+  wetOn=!!data.wetOn; if(wetFloor) wetFloor.visible=wetOn; syncWetBtn();
   if(typeof data.fogAmt==='number'){ ditherPass.uniforms.uTintAmt.value=data.fogAmt;
     const el=document.getElementById('fog'); if(el){ el.value=data.fogAmt; document.getElementById('vFog').textContent=data.fogAmt.toFixed(2); } }
   if(data.fogColor){ ditherPass.uniforms.uTint.value.set(data.fogColor);
