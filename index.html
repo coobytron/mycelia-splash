@@ -53,10 +53,12 @@
   }
   .splash-eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 16px var(--accent);}
   .splash-title{
-    max-width:780px;margin:0;font-size:clamp(42px,8vw,94px);line-height:.92;letter-spacing:-.07em;font-weight:700;
+    max-width:780px;margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:clamp(42px,8vw,94px);line-height:.98;letter-spacing:-.02em;font-weight:600;font-kerning:normal;
     text-wrap:balance;color:#f2fffd;text-shadow:0 0 28px rgba(53,224,216,.12), 0 18px 70px rgba(0,0,0,.48);
   }
-  .splash-title .glow{color:#c6fffb;text-shadow:0 0 12px rgba(103,255,235,.3), 0 0 36px rgba(53,224,216,.16);}
+  .splash-title .glow{color:#ffe7d1;
+    text-shadow:0 0 14px rgba(255,150,60,.6), 0 0 44px rgba(255,120,30,.4), 0 0 90px rgba(255,90,20,.22);}
   .splash-subtitle{
     max-width:620px;margin:22px 0 0;color:#d8e9e7;font-size:clamp(18px,2.2vw,24px);
     line-height:1.3;letter-spacing:-.02em;text-shadow:0 10px 40px rgba(0,0,0,.42);
@@ -100,7 +102,13 @@
 
   .section{margin-top:16px;}
   .section h3{font-size:11px;font-weight:600;letter-spacing:.18em;
-    text-transform:uppercase;color:var(--dim);margin:0 0 10px;}
+    text-transform:uppercase;color:var(--dim);margin:0 0 10px;
+    cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none;}
+  .section h3:hover{color:var(--text);}
+  .section h3::after{content:'▾';font-size:10px;opacity:.55;transition:transform .2s;}
+  .section.collapsed h3{margin-bottom:0;}
+  .section.collapsed h3::after{transform:rotate(-90deg);}
+  .section.collapsed > *:not(h3){display:none;}
 
   .row{margin-bottom:11px;}
   .row label{display:flex;justify-content:space-between;align-items:baseline;
@@ -122,7 +130,7 @@
   input[type=color]::-webkit-color-swatch-wrapper{padding:2px;}
   input[type=color]::-webkit-color-swatch{border:none;border-radius:5px;}
 
-  .chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
   .chip{font-size:11px;padding:5px 10px;border-radius:999px;cursor:pointer;
     background:#ffffff12;color:#cfe3e1;border:1px solid transparent;
     transition:background .12s,border-color .12s;user-select:none;}
@@ -179,6 +187,7 @@
   .shelf{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
     color:#6d8584;margin:10px 0 6px;}
   .shelf:first-child{margin-top:0;}
+  .row.is-disabled{opacity:.38;pointer-events:none;}
   .chip .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
     vertical-align:middle;box-shadow:0 0 5px currentColor;}
 </style>
@@ -253,6 +262,10 @@
       <label>Branchiness <b id="vBranch">0.045</b></label>
       <input type="range" id="branch" min="0.02" max="0.09" step="0.005" value="0.045">
     </div>
+    <div class="row">
+      <label>Density <b id="vDensity">20</b></label>
+      <input type="range" id="density" min="6" max="50" step="1" value="20">
+    </div>
     <div class="btns">
       <div class="btn" id="pauseBtn">Pause</div>
       <div class="btn" id="newSeedBtn">New Seed</div>
@@ -267,10 +280,17 @@
 
   <div class="section">
     <h3>Render</h3>
-    <div class="row">
+    <div class="shelf">Art Style</div>
+    <div class="chips" id="styleChips"></div>
+    <div class="row" id="ditherRow">
       <label>Dither <b id="vDither">0.06</b></label>
       <input type="range" id="dither" min="0" max="0.2" step="0.005" value="0.06">
     </div>
+    <div class="row">
+      <label>Fog Tint <b id="vFog">0.20</b></label>
+      <input type="range" id="fog" min="0" max="0.5" step="0.01" value="0.2">
+    </div>
+    <div class="colorrow"><span>Atmosphere</span><input type="color" id="fogColor" value="#0e3b46"></div>
     <div class="btns">
       <div class="btn glow" id="aoBtn">Ambient Occlusion: On</div>
     </div>
@@ -297,12 +317,14 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
+import { GLTFLoader }      from 'three/addons/loaders/GLTFLoader.js';
 
 /* ============================================================= *
  * 5. CONSTANTS
  * ============================================================= */
 const MAX_POP       = 50;
 const MIN_SPACING   = 0.85;
+const HERO_CLEAR    = 2.5;        // keep plantings/fruiting clear of the (now larger) seated gardener
 const GROUND_SIZE   = 44;
 const GROUND_HALF   = 19;        // keep plantings inside this
 const CHILD_RADIUS  = 3.0;
@@ -752,41 +774,87 @@ function disposeGroup(group){
 }
 
 function buildFern(){
+  // ~2.6× larger than v1 so fronds clear the 0.27-unit grass and read as a plant, not a sliver
   const grp=new THREE.Group();
-  const baseEI=0.55;
-  for(let i=0;i<7;i++){
-    const a=(i/7)*Math.PI*2;
-    const mat=new THREE.MeshStandardMaterial({color:0x091a0c,emissive:new THREE.Color(.06,.48,.22),
-      emissiveIntensity:baseEI,side:THREE.DoubleSide,transparent:true,opacity:.9,depthWrite:false});
+  const baseEI=0.75;
+  const N=9;
+  for(let i=0;i<N;i++){
+    const a=(i/N)*Math.PI*2;
+    const mat=new THREE.MeshStandardMaterial({color:0x0a2110,emissive:new THREE.Color(.07,.55,.26),
+      emissiveIntensity:baseEI,side:THREE.DoubleSide,transparent:true,opacity:.92,depthWrite:false});
     mat.userData.baseEI=baseEI;
-    const frond=new THREE.Mesh(new THREE.PlaneGeometry(.065,.44,1,1),mat);
-    frond.rotation.y=a; frond.rotation.x=-.35;
-    frond.position.set(Math.cos(a)*.04,.12,Math.sin(a)*.04); grp.add(frond);
+    // tapered blade: wide base -> point, arcing outward and up
+    const frond=new THREE.Mesh(new THREE.PlaneGeometry(.15,1.05,1,4),mat);
+    const pos=frond.geometry.attributes.position;         // curve the blade into a fiddlehead arc
+    for(let v=0;v<pos.count;v++){
+      const y=pos.getY(v), t=(y+.525)/1.05;                // 0 base -> 1 tip
+      pos.setX(v, pos.getX(v)*(1-t*0.82));                 // taper to a point
+      pos.setZ(v, -Math.pow(t,1.7)*0.42);                  // arc backward (leans outward once rotated)
+    }
+    pos.needsUpdate=true; frond.geometry.computeVertexNormals();
+    frond.rotation.y=a; frond.rotation.x=-.55;
+    frond.position.set(Math.cos(a)*.12,.30,Math.sin(a)*.12); grp.add(frond);
   }
-  const cMat=new THREE.MeshStandardMaterial({emissive:new THREE.Color(.1,.85,.4),emissiveIntensity:1.6,color:0x081508});
-  cMat.userData.baseEI=1.6;
-  grp.add(new THREE.Mesh(new THREE.SphereGeometry(.038,6,6),cMat));
+  const cMat=new THREE.MeshStandardMaterial({emissive:new THREE.Color(.12,.9,.42),emissiveIntensity:2.0,color:0x0a1a0a});
+  cMat.userData.baseEI=2.0;
+  const core=new THREE.Mesh(new THREE.SphereGeometry(.085,8,8),cMat); core.position.y=.16; grp.add(core);
   return grp;
 }
 function buildFlower(glowHex){
+  // ~1.9× larger; petals fan into a proper bloom on a taller stem
   const grp=new THREE.Group();
   const col=new THREE.Color(glowHex||'#cc44ff');
-  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.018,.025,.52,5),
-    new THREE.MeshStandardMaterial({color:0x091a0c,roughness:1}));
-  stem.position.y=.26; grp.add(stem);
-  for(let i=0;i<5;i++){
-    const a=(i/5)*Math.PI*2;
-    const mat=new THREE.MeshStandardMaterial({color:0x0e0010,emissive:col,emissiveIntensity:.75,
-      side:THREE.DoubleSide,transparent:true,opacity:.88,depthWrite:false});
-    mat.userData.baseEI=.75;
-    const petal=new THREE.Mesh(new THREE.PlaneGeometry(.11,.21),mat);
-    petal.rotation.y=a; petal.rotation.x=-.45;
-    petal.position.set(Math.cos(a)*.09,.53,Math.sin(a)*.09); grp.add(petal);
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.03,.05,1.0,6),
+    new THREE.MeshStandardMaterial({color:0x0b2110,emissive:col.clone().multiplyScalar(.12),roughness:1}));
+  stem.position.y=.5; grp.add(stem);
+  // a couple of leaves down the stem
+  for(let i=0;i<2;i++){
+    const lm=new THREE.MeshStandardMaterial({color:0x0b2110,emissive:new THREE.Color(.05,.4,.2),
+      emissiveIntensity:.5,side:THREE.DoubleSide,transparent:true,opacity:.9,depthWrite:false});
+    lm.userData.baseEI=.5;
+    const leaf=new THREE.Mesh(new THREE.PlaneGeometry(.12,.34),lm);
+    leaf.rotation.y=i*Math.PI+0.6; leaf.rotation.z=-.7; leaf.position.set(0,.34+i*.22,0); grp.add(leaf);
   }
-  const cMat=new THREE.MeshStandardMaterial({color:0x0a0005,emissive:col,emissiveIntensity:2.6});
-  cMat.userData.baseEI=2.6;
-  const ctr=new THREE.Mesh(new THREE.SphereGeometry(.055,8,8),cMat);
-  ctr.position.y=.53; grp.add(ctr);
+  const P=6;
+  for(let i=0;i<P;i++){
+    const a=(i/P)*Math.PI*2;
+    const mat=new THREE.MeshStandardMaterial({color:0x120014,emissive:col,emissiveIntensity:.95,
+      side:THREE.DoubleSide,transparent:true,opacity:.9,depthWrite:false});
+    mat.userData.baseEI=.95;
+    const petal=new THREE.Mesh(new THREE.PlaneGeometry(.22,.42,1,2),mat);
+    const pos=petal.geometry.attributes.position;                // cup the petal slightly
+    for(let v=0;v<pos.count;v++){ const t=(pos.getY(v)+.21)/.42; pos.setZ(v,-Math.pow(t,2)*0.1); }
+    pos.needsUpdate=true; petal.geometry.computeVertexNormals();
+    petal.rotation.y=a; petal.rotation.x=-.5;
+    petal.position.set(Math.cos(a)*.17,1.0,Math.sin(a)*.17); grp.add(petal);
+  }
+  const cMat=new THREE.MeshStandardMaterial({color:0x140008,emissive:col,emissiveIntensity:3.0});
+  cMat.userData.baseEI=3.0;
+  const ctr=new THREE.Mesh(new THREE.SphereGeometry(.1,10,10),cMat);
+  ctr.position.y=1.0; grp.add(ctr);
+  return grp;
+}
+
+/* ---- THE GARDENER — a laptop rig (deck + emissive screen + face light) that hosts the
+ * real self-portrait .glb (loaded async in §11). The screen light is the storytelling beat. */
+const HERO_MODEL_URL='Meshy_AI_Self_Portrait_in_a_Cl_0703065905_texture.glb';
+function buildHero(){
+  const grp=new THREE.Group();
+  const box=(w,h,d)=>new THREE.BoxGeometry(w,h,d);
+  // laptop sits on the lap, in front of the seated figure — deck + hinged emissive screen
+  const lap=new THREE.Group();
+  const alu=new THREE.MeshStandardMaterial({color:0x0c1013,roughness:.4,metalness:.5});
+  const deck=new THREE.Mesh(box(.52,.03,.36),alu); lap.add(deck);
+  const screenMat=new THREE.MeshStandardMaterial({color:0x0a0f14,emissive:0x9fdcff,
+    emissiveIntensity:2.4,roughness:.3,metalness:0});
+  screenMat.userData.baseEI=2.4;
+  const screen=new THREE.Mesh(box(.52,.34,.02),screenMat); screen.position.set(0,.2,-.18); screen.rotation.x=-1.15; lap.add(screen);
+  lap.position.set(0,.74,.5);          // lap height / forward — tuned once the model loads
+  grp.add(lap);
+  // the money shot: a soft cool light thrown up from the screen onto the face/chest
+  const glow=new THREE.PointLight(0xa9d8ff, 7.0, 4.5, 2.0);
+  glow.position.set(0,1.05,.42); grp.add(glow);
+  grp.userData={screen:screenMat, glow, lap, model:null};
   return grp;
 }
 
@@ -811,6 +879,7 @@ class Mushroom {
     this.group.scale.setScalar(0.001);
     this.group.userData.parts.cap.morphTargetInfluences[0]=1;
     scene.add(this.group);
+    if(styleFlat) flattenGroup(this.group,true);   // stay faceted if Low-Poly is active
   }
   get tEmerge(){ return this.genome.growthDuration*0.18; }
   get tGrow(){   return this.genome.growthDuration; }
@@ -818,8 +887,9 @@ class Mushroom {
   get tDecay(){  return this.genome.lifespan*0.9; }
   get tDead(){   return this.genome.lifespan; }
 
-  update(dt){
-    this.age += dt;
+  update(dt, ageMul=1){
+    // overcrowding hastens the end of already-mature specimens (natural die-off), not the young
+    this.age += dt * (this.stage>=STAGE.MATURE ? ageMul : 1);
     const a=this.age, g=this.genome, parts=this.group.userData.parts;
 
     if      (a<this.tEmerge) this.stage=STAGE.EMERGE;
@@ -937,33 +1007,38 @@ const _dropTex=(()=>{
 class Plant {
   constructor(type,genome,position){
     this.type=type; this.genome=genome; this.health=1; this.age=0;
+    this.swayPhase=Math.random()*Math.PI*2;
     this.group=type==='fern'?buildFern():buildFlower(genome.glowColor);
     this.group.position.copy(position);
     this.group.rotation.y=Math.random()*Math.PI*2;
-    this.baseScale=.5+Math.random()*.5;
+    this.baseScale=.9+Math.random()*.45;
     this.group.scale.setScalar(this.baseScale*0.08);  // start small but visible
     this.dropSprite=new THREE.Sprite(new THREE.SpriteMaterial(
       {map:_dropTex,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false}));
-    this.dropSprite.scale.setScalar(.22); this.dropSprite.position.y=.95;
+    this.dropSprite.scale.setScalar(.3); this.dropSprite.position.y=1.5;
     this.group.add(this.dropSprite);
     scene.add(this.group);
+    if(styleFlat) flattenGroup(this.group,true);   // stay faceted if Low-Poly is active
   }
   update(dt){
     this.age+=dt;
     const growS=this.baseScale*Math.min(1,Math.max(0.08,easeOutCubic(this.age/3)));
     const wiltS=this.health<.08?Math.max(.001,this.group.scale.x*.997):1;
     this.group.scale.setScalar(growS*wiltS);
+    // idle sway + a progressive lean as it dries out — thirst reads as posture, not just dimming
+    this.group.rotation.z=0.045*Math.sin(simClock.t*0.8+this.swayPhase)+(1-this.health)*0.22;
+    this.group.rotation.x=0.02*Math.sin(simClock.t*0.6+this.swayPhase*1.3);
     this.health=Math.max(0,this.health-dt*.0025);
     const dim=.25+.75*this.health;
     this.group.traverse(c=>{if(c.isMesh&&c.material&&c.material.userData.baseEI!==undefined)
       c.material.emissiveIntensity=c.material.userData.baseEI*dim;});
-    if(this.health<.28){
+    if(this.health<.5){
       const pulse=.5+.5*Math.sin(this.age*3.5);
-      this.dropSprite.material.opacity=pulse*(1-this.health/.28)*.85;
-      this.dropSprite.scale.setScalar(.18+.07*pulse);
+      this.dropSprite.material.opacity=pulse*(1-this.health/.5)*.9;
+      this.dropSprite.scale.setScalar(.26+.1*pulse);
     } else { this.dropSprite.material.opacity=0; }
   }
-  water(amt=.35){ this.health=Math.min(1,this.health+amt); }
+  water(amt=.5){ this.health=Math.min(1,this.health+amt); }
   dispose(){ scene.remove(this.group);
     this.group.traverse(c=>{if(c.isMesh){c.geometry.dispose();c.material.dispose();}}); }
 }
@@ -978,6 +1053,7 @@ const mycAge=new Float32Array(MYC_N);                 // time since last tip dep
 const mycGenome=new Array(MYC_N).fill(null);          // lineage that will fruit here
 let mycDirty=true;
 let FRUIT_THRESHOLD=0.28;
+let softPop=20;                 // target garden density — fruiting slows near it, crowding culls above it
 const SUBSTRATE_REGEN=0.02, RING_LIFETIME=10, RING_DECAY=0.2;
 // --- hyphal-tip growth: filaments radiate from colonies, branch, chase substrate, fuse (anastomose) ---
 let tips=[];                                          // active growing filament tips
@@ -1055,14 +1131,18 @@ let fruitTimer=0;
 function fruitPass(dt){
   fruitTimer+=dt; if(fruitTimer<0.4) return; fruitTimer=0;
   if(garden.length>=MAX_POP) return;
+  const fill=garden.length/softPop;
+  const pSpawn=clamp(0.5*(1-fill),0,0.5);       // fruiting tapers to zero as the garden reaches its target density
+  if(pSpawn<=0.001) return;
   let made=0;
-  for(let s=0;s<80 && made<5;s++){
+  for(let s=0;s<80 && made<4;s++){
     if(garden.length>=MAX_POP) break;
     const i=(Math.random()*MYC_N)|0;
     if(myc[i]<FRUIT_THRESHOLD || substrate[i]<0.25 || !mycGenome[i]) continue;
-    if(Math.random()>0.45) continue;
+    if(Math.random()>pSpawn) continue;
     const cx=i%MYC_RES, cz=(i/MYC_RES)|0, c=cellCenter(cx,cz);
     const p=new THREE.Vector3(c[0],c[1],c[2]);
+    if(p.x*p.x+p.z*p.z<HERO_CLEAR*HERO_CLEAR) continue;            // leave the gardener's seat clear
     if(garden.some(m=>m.group.position.distanceTo(p)<MIN_SPACING)) continue;
     garden.push(new Mushroom(mutate(mycGenome[i], mycGenome[i].mutationRate), p));
     substrate[i]=Math.max(0,substrate[i]-0.45); myc[i]=Math.max(0,myc[i]-0.25);
@@ -1070,15 +1150,17 @@ function fruitPass(dt){
     made++;
   }
 }
-function resetFields(){ myc.fill(0); substrate.fill(1); mycAge.fill(0); mycGenome.fill(null); tips=[]; pulseRings.length=0; mycDirty=true; }
+function resetFields(){ myc.fill(0); substrate.fill(1); mycAge.fill(0); mycGenome.fill(null); tips=[]; pulseRings.length=0; waterRings.length=0; mycDirty=true; }
 // glowing mycelium texture on the ground (DataTexture assigned in scene setup)
 let mycTex=null, mycTexData=null;
 const _mc=new THREE.Color();
 const pulseRings=[];   // {cx,cz,startT} — radial pulse emitted when fruitPass births a mushroom
+const waterRings=[];   // {cx,cz,startT} — cool blue ripple emitted where the user waters
 function updateMycTex(){
   if(!mycTexData) return;
   const ng=world.nightGlow;
   for(let p=pulseRings.length-1;p>=0;p--) if(simClock.t-pulseRings[p].startT>3.0) pulseRings.splice(p,1);
+  for(let p=waterRings.length-1;p>=0;p--) if(simClock.t-waterRings[p].startT>1.8) waterRings.splice(p,1);
   for(let i=0;i<MYC_N;i++){
     const v=myc[i], j=i*4;
     let r=0.12,g=0.85,b=0.5;
@@ -1087,17 +1169,27 @@ function updateMycTex(){
     // contrast curve: only bright filament cores glow as tendrils; dim haze recedes to black
     const c=clamp((v-0.3)/0.7,0,1), lit=c*c;            // gamma ~2 — emphasises cores, darkens gaps
     let inten=lit*0.42*ng;
+    const cx=i%MYC_RES, cz=(i/MYC_RES)|0;
     if(pulseRings.length){
-      const cx=i%MYC_RES, cz=(i/MYC_RES)|0;
       for(const p of pulseRings){
         const el=simClock.t-p.startT, a=Math.max(0,1-el/3);
         const dist=Math.sqrt((cx-p.cx)**2+(cz-p.cz)**2);
         inten+=Math.max(0,1-Math.abs(dist-el*4.5)*1.0)*a*0.38*ng;
       }
     }
-    mycTexData[j]=Math.min(255,r*inten*255);
-    mycTexData[j+1]=Math.min(255,g*inten*255);
-    mycTexData[j+2]=Math.min(255,b*inten*255);
+    let rr=r*inten, gg=g*inten, bb=b*inten;
+    if(waterRings.length){
+      let w=0;
+      for(const p of waterRings){
+        const el=simClock.t-p.startT, a=Math.max(0,1-el/1.8);
+        const dist=Math.sqrt((cx-p.cx)**2+(cz-p.cz)**2);
+        w+=Math.max(0,1-Math.abs(dist-el*7.0)*0.9)*a*0.6*ng;
+      }
+      gg+=w*0.55; bb+=w;                                 // cool blue wave, independent of genome tint
+    }
+    mycTexData[j]=Math.min(255,rr*255);
+    mycTexData[j+1]=Math.min(255,gg*255);
+    mycTexData[j+2]=Math.min(255,bb*255);
     mycTexData[j+3]=255;
   }
   mycTex.needsUpdate=true;
@@ -1252,10 +1344,12 @@ renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.shadowMap.enabled=true;
 renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 
-const DAY_BG=new THREE.Color(0x0b2632), NIGHT_BG=new THREE.Color(0x03070a);
+const DAY_BG=new THREE.Color(0x1b4a7a), NIGHT_BG=new THREE.Color(0x03070a);
+const DAY_FOG=new THREE.Color(0x2a66b4), NIGHT_FOG=new THREE.Color(0x07202c);
+const DAY_HEMI=new THREE.Color(0x5a90dc), NIGHT_HEMI=new THREE.Color(0x143a44);
 const scene=new THREE.Scene();
 scene.background=NIGHT_BG.clone();
-scene.fog=new THREE.FogExp2(0x04080a,0.04);
+scene.fog=new THREE.FogExp2(0x08222c,0.05);   // colored + a touch denser → the whole garden reads as in soft fog
 
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,300);
 camera.position.set(0,9,15);
@@ -1419,6 +1513,32 @@ const crtPlane=new THREE.Mesh(
   makeFieldGlowMaterial(crtTex,CRT_RES,CRT_RES));
 crtPlane.position.y=0.08; crtPlane.renderOrder=-1; scene.add(crtPlane);
 
+// ── THE GARDENER — seated at the heart of the garden, face lit by the laptop ──
+const hero=buildHero();
+hero.position.set(0,getHeightAt(0,0),0);
+hero.rotation.y=0;                  // flip toward camera once we see which way the model faces
+scene.add(hero);
+const heroScreen=hero.userData.screen, heroGlow=hero.userData.glow;
+
+// load the real self-portrait and seat it at the centre (async — laptop/light already live)
+new GLTFLoader().load(HERO_MODEL_URL, (gltf)=>{
+  const model=gltf.scene;
+  model.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
+  // normalise: scale to a seated target height, feet on the ground, centred on x/z
+  const box0=new THREE.Box3().setFromObject(model), size=new THREE.Vector3(); box0.getSize(size);
+  const HERO_TARGET_H=2.4;
+  model.scale.setScalar(HERO_TARGET_H/Math.max(0.001,size.y));
+  const box1=new THREE.Box3().setFromObject(model), c=new THREE.Vector3(); box1.getCenter(c);
+  model.position.x-=c.x; model.position.z-=c.z; model.position.y-=box1.min.y;
+  model.userData.baseY=model.position.y;
+  hero.add(model); hero.userData.model=model;
+  if(styleFlat) flattenGroup(model,true);
+  needsRender=true;
+}, undefined, (err)=>{
+  console.warn('Gardener model failed to load — if opened via file://, some browsers block local .glb. '
+    +'Run a local server in the mushroom sim folder (python3 -m http.server) and open http://localhost:8000/. Error:', err);
+});
+
 // shared reaction-diffusion texture sampled by every cap shader (§8b)
 seedRD();
 rdTexData=new Uint8Array(RD_N*4);
@@ -1439,20 +1559,52 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 bloom.setSize(innerWidth*0.5, innerHeight*0.5);   // half-res bloom: ~4x cheaper, looks identical (softer)
 
-// final ordered-dither pass — breaks bloom banding + adds a refined stipple grain over everything
-const DitherShader={
-  uniforms:{ tDiffuse:{value:null}, uBayer:{value:makeBayerTexture()}, uAmount:{value:0.06} },
+// final art-direction pass — selectable style (Bayer / Halftone / Splatter / Low-poly)
+// + a global fog-colour grade that unifies the whole frame into one soft atmosphere
+const StyleShader={
+  uniforms:{ tDiffuse:{value:null}, uBayer:{value:makeBayerTexture()}, uAmount:{value:0.06},
+             uStyle:{value:0}, uTint:{value:NIGHT_FOG.clone()}, uTintAmt:{value:0.2}, uNight:{value:1},
+             uResolution:{value:new THREE.Vector2(innerWidth,innerHeight)} },
   vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
   fragmentShader:`precision highp float;
-    uniform sampler2D tDiffuse; uniform sampler2D uBayer; uniform float uAmount; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform sampler2D uBayer; uniform float uAmount;
+    uniform int uStyle; uniform vec3 uTint; uniform float uTintAmt; uniform float uNight; uniform vec2 uResolution; varying vec2 vUv;
+    float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+    float luma(vec3 c){ return dot(c,vec3(0.299,0.587,0.114)); }
+    mat2 rot(float a){ float s=sin(a),c=cos(a); return mat2(c,-s,s,c); }
     void main(){
+      vec2 fc=gl_FragCoord.xy;
       vec3 c=texture2D(tDiffuse,vUv).rgb;
-      float t=texture2D(uBayer, gl_FragCoord.xy/8.0).r;   // 8×8 ordered threshold [0,1)
-      c += (t-0.5)*uAmount;                                // ordered dither offset
-      gl_FragColor=vec4(c,1.0);
+      vec3 outc=c;
+      if(uStyle==0){                                   // Bayer — ordered dither (default, filmic)
+        float t=texture2D(uBayer, fc/8.0).r;
+        outc=c+(t-0.5)*uAmount;
+      } else if(uStyle==1){                            // Halftone — glowing ink dots, tighten at night
+        float cell=6.0-2.0*uNight;
+        vec2 g=fract(rot(0.4)*fc/cell)-0.5;
+        float d=length(g)*2.0;
+        float r=sqrt(clamp(luma(c)*1.35,0.0,1.0));
+        outc=c*smoothstep(r, r-0.28, d);
+      } else if(uStyle==2){                            // Splatter — chunky stochastic spray (keeps blacks + glow)
+        vec2 id=floor(fc/3.0);
+        float keep=step(hash(id), pow(luma(c),0.8)+(hash(id+7.3)-0.5)*0.16);
+        outc=c*mix(0.03,1.0,keep);
+      } else {                                         // Low-Poly — luma facets w/ neighbour-sampled edges (no derivatives)
+        float lp=luma(c);
+        float ql=floor(lp*5.0+0.5)/5.0;
+        outc=c*(ql/max(lp,1e-3));
+        vec2 px=1.0/uResolution;
+        float lx=luma(texture2D(tDiffuse,vUv+vec2(px.x,0.0)).rgb);
+        float ly=luma(texture2D(tDiffuse,vUv+vec2(0.0,px.y)).rgb);
+        float edge=smoothstep(0.05,0.14,abs(lx-lp)+abs(ly-lp));
+        outc*=1.0-(0.4+0.3*uNight)*edge;
+      }
+      // soft fog grade — pull the frame toward one atmospheric colour (brighter areas tint less)
+      outc=mix(outc, uTint*(0.35+0.65*luma(outc)), uTintAmt);
+      gl_FragColor=vec4(max(outc,0.0),1.0);
     }`
 };
-const ditherPass=new ShaderPass(DitherShader);
+const ditherPass=new ShaderPass(StyleShader);
 composer.addPass(ditherPass);
 
 // ambient occlusion (GTAO) — loaded defensively: if the addon path/API ever changes, the app still runs
@@ -1481,6 +1633,7 @@ function rebuildPreview(){
   preview.userData.parts.cap.morphTargetInfluences[0]=0; // mature
   preview.visible=(appMode==='edit');
   scene.add(preview);
+  if(typeof styleFlat!=='undefined' && styleFlat) flattenGroup(preview,true);
   needsRender=true;
 }
 function applyMaterialToPreview(){
@@ -1531,6 +1684,11 @@ if(panelToggle){
   panelToggle.addEventListener('click',()=>setPanelCollapsed(!document.body.classList.contains('panel-collapsed')));
   syncPanelToggle();
 }
+// collapsible panel sections — click any section header to fold it (delegated, so it covers generated sections)
+document.getElementById('panel').addEventListener('click',e=>{
+  const h=e.target.closest('.section > h3'); if(!h) return;
+  h.parentElement.classList.toggle('collapsed'); needsRender=true;
+});
 addEventListener('keydown',e=>{
   if(e.key==='c'||e.key==='C') setPanelCollapsed(!document.body.classList.contains('panel-collapsed'));
 });
@@ -1665,6 +1823,8 @@ const spreadEl=document.getElementById('spread'), vSpread=document.getElementByI
 spreadEl.addEventListener('input',()=>{ mycReach=parseInt(spreadEl.value); vSpread.textContent=mycReach; scheduleSave(); });
 const branchEl=document.getElementById('branch'), vBranch=document.getElementById('vBranch');
 branchEl.addEventListener('input',()=>{ mycBranch=parseFloat(branchEl.value); vBranch.textContent=mycBranch.toFixed(3); scheduleSave(); });
+const densityEl=document.getElementById('density'), vDensity=document.getElementById('vDensity');
+densityEl.addEventListener('input',()=>{ softPop=parseInt(densityEl.value); vDensity.textContent=softPop; scheduleSave(); });
 const pauseBtn=document.getElementById('pauseBtn');
 pauseBtn.onclick=()=>{ simClock.paused=!simClock.paused; pauseBtn.textContent=simClock.paused?'Resume':'Pause'; pauseBtn.classList.toggle('primary',simClock.paused); };
 document.getElementById('newSeedBtn').onclick=()=>{ genome.seed=(Math.random()*1e9)|0; rebuildPreview(); scheduleSave(); };
@@ -1674,6 +1834,39 @@ function syncWandererBtn(){ wandererBtn.textContent='Wanderer: '+(wandererOn?'On
 wandererBtn.onclick=()=>{ wandererOn=!wandererOn; crtSpawnTimer=99; syncWandererBtn(); scheduleSave(); needsRender=true; };
 const ditherEl=document.getElementById('dither'), vDither=document.getElementById('vDither');
 ditherEl.addEventListener('input',()=>{ ditherPass.uniforms.uAmount.value=parseFloat(ditherEl.value); vDither.textContent=parseFloat(ditherEl.value).toFixed(3); needsRender=true; scheduleSave(); });
+// art-direction style selector — Low-Poly reshapes the meshes; the rest are screen looks
+let styleMode=0, styleFlat=false;
+const STYLE_NAMES=['Bayer','Halftone','Splatter','Low-Poly'];
+const STYLE_DOTS=['#eaf6f4','#35e0d8','#0a84ff','#9dff6b'];
+function flattenGroup(root,on){                      // toggle REAL flat-shading on a group's standard materials
+  root.traverse(o=>{ const m=o.material; if(!m) return;
+    (Array.isArray(m)?m:[m]).forEach(mm=>{ if(mm.isMeshStandardMaterial && mm.flatShading!==on){ mm.flatShading=on; mm.needsUpdate=true; } }); });
+}
+function applyObjectStyle(){                          // Low-Poly = faceted normals on the real meshes, not a screen filter
+  styleFlat=(styleMode===3);
+  flattenGroup(scene,styleFlat);
+  if(preview) flattenGroup(preview,styleFlat);
+}
+function setStyle(n){
+  styleMode=n; ditherPass.uniforms.uStyle.value=(n===3?0:n);   // Low-Poly drives the meshes; post stays a neutral dither+grade
+  applyObjectStyle();
+  document.querySelectorAll('#styleChips .chip').forEach((c,i)=>c.classList.toggle('on',i===n));
+  document.getElementById('ditherRow').classList.toggle('is-disabled', !(n===0||n===3));  // Dither active for Bayer & Low-Poly
+  needsRender=true; scheduleSave();
+}
+(function buildStyleChips(){
+  const host=document.getElementById('styleChips');
+  STYLE_NAMES.forEach((name,i)=>{ const chip=document.createElement('div');
+    chip.className='chip'+(i===0?' on':'');
+    const d=document.createElement('span'); d.className='dot'; d.style.color=STYLE_DOTS[i];
+    chip.append(d,document.createTextNode(name)); chip.onclick=()=>setStyle(i); host.appendChild(chip); });
+})();
+// soft global fog-diffusion grade (colour auto-breathes with time-of-day until you pick a colour)
+let fogAuto=true;
+const fogEl=document.getElementById('fog'), vFog=document.getElementById('vFog');
+fogEl.addEventListener('input',()=>{ ditherPass.uniforms.uTintAmt.value=parseFloat(fogEl.value); vFog.textContent=parseFloat(fogEl.value).toFixed(2); needsRender=true; scheduleSave(); });
+const fogColorEl=document.getElementById('fogColor');
+fogColorEl.addEventListener('input',()=>{ fogAuto=false; ditherPass.uniforms.uTint.value.set(fogColorEl.value); needsRender=true; scheduleSave(); });
 const aoBtn=document.getElementById('aoBtn');
 function syncAoBtn(){ aoBtn.textContent='Ambient Occlusion: '+(aoOn?'On':'Off'); aoBtn.classList.toggle('glow',aoOn); }
 aoBtn.onclick=()=>{ aoOn=!aoOn; if(gtao) gtao.enabled=aoOn; syncAoBtn(); needsRender=true; scheduleSave(); };
@@ -1812,6 +2005,7 @@ function groundHit(e){
 function spotValid(p){
   if(garden.length>=MAX_POP) return false;
   if(Math.abs(p.x)>GROUND_HALF||Math.abs(p.z)>GROUND_HALF) return false;
+  if(p.x*p.x+p.z*p.z<HERO_CLEAR*HERO_CLEAR) return false;      // don't plant on the gardener
   if(!garden.every(m=>m.group.position.distanceTo(p)>=MIN_SPACING)) return false;
   return plants.every(pl=>pl.group.position.distanceTo(p)>=MIN_SPACING*0.7);
 }
@@ -1821,12 +2015,17 @@ function nourishAt(point){
     const i=mycIdx(clamp((cx|0)+dx,0,MYC_RES-1),clamp((cz|0)+dz,0,MYC_RES-1));
     substrate[i]=Math.min(1,substrate[i]+.32);
   }
-  plants.filter(p=>p.group.position.distanceTo(point)<2.2).forEach(p=>p.water());
+  let watered=0;
+  plants.filter(p=>p.group.position.distanceTo(point)<2.6).forEach(p=>{ p.water(); watered++; });
   garden.filter(m=>m.group.position.distanceTo(point)<2.2).forEach(m=>{
     const [mx,mz]=worldToCellF(m.group.position.x,m.group.position.z).map(v=>v|0);
     const mi=mycIdx(mx,mz); substrate[mi]=Math.min(1,substrate[mi]+.4);
   });
   if(wandererOn) attractWanderer(point.x, point.z);
+  // visible feedback: blue splash + an expanding blue ripple in the mycelium layer
+  waterRings.push({cx:cx|0,cz:cz|0,startT:simClock.t});
+  particles.burst(new THREE.Vector3(point.x,point.y+0.25,point.z), 34, '#6fd2ff');
+  toast(watered?`💧 Nourished ${watered} plant${watered>1?'s':''}`:'💧 Watered the soil');
   mycDirty=true; needsRender=true;
 }
 function plantAt(point){
@@ -1865,6 +2064,7 @@ function onPointerDown(e){
 function onPointerMove(e){
   resetIdle();
   if(appMode!=='garden'||!preview||isUiEvent(e)) return;
+  if(waterMode){ if(preview.visible){ preview.visible=false; needsRender=true; } return; }  // no plant ghost while watering
   const hit=groundHit(e); if(!hit) return;
   preview.visible=true; preview.position.copy(hit.point);
   setGhost(preview,true,!spotValid(hit.point));
@@ -1921,7 +2121,9 @@ function resolveOverlap(){
 }
 function stepSim(dt){
   simClock.t+=dt;
-  for(const m of garden) m.update(dt);
+  const crowd=Math.max(0, garden.length-softPop)/Math.max(1,softPop);   // 0 at/under target, grows above
+  const ageMul=1+crowd*2.4;                                             // crowded gardens age (and cull) faster
+  for(const m of garden) m.update(dt, ageMul);
   for(let i=garden.length-1;i>=0;i--) if(garden[i].stage===STAGE.DEAD){ garden[i].dispose(); garden.splice(i,1); }
   for(const p of plants) p.update(dt);
   for(let i=plants.length-1;i>=0;i--) if(plants[i].health<=0){ plants[i].dispose(); plants.splice(i,1); }
@@ -1946,8 +2148,12 @@ function animate(now){
   world.night=0.5+0.5*Math.cos(tod*Math.PI*2);        // 1 at midnight, 0 at noon
   world.nightGlow=lerp(0.5,1.0,world.night);
   scene.background.copy(NIGHT_BG).lerp(DAY_BG,1-world.night);
+  scene.fog.color.copy(NIGHT_FOG).lerp(DAY_FOG,1-world.night);   // atmosphere warms toward day
+  if(fogAuto) ditherPass.uniforms.uTint.value.copy(NIGHT_FOG).lerp(DAY_FOG,1-world.night); // grade tracks the circadian fog
+  ditherPass.uniforms.uNight.value=world.night;                  // filters tighten/harden after dusk
   key.intensity=lerp(0.55,0.06,world.night);
-  hemi.intensity=lerp(0.55,0.30,world.night);
+  hemi.intensity=lerp(0.72,0.30,world.night);
+  hemi.color.copy(NIGHT_HEMI).lerp(DAY_HEMI,1-world.night);      // ambient light itself goes blue by day
   bloom.strength=lerp(0.35,0.6,world.night);
   // procedural sun + moon
   const sunA=tod*Math.PI*2, sunElev=-Math.cos(sunA);
@@ -1969,6 +2175,12 @@ function animate(now){
     mistTex.offset.x+=realDt*0.004; mistTex.offset.y+=realDt*0.0025;
     grassUniforms.uTime.value=now/1000;
     grassUniforms.uNightGlow.value=world.nightGlow;
+    // gardener: laptop screen typing-flicker + gentle breathing
+    const flick=0.85+0.15*Math.sin(now*0.019)+0.06*Math.sin(now*0.13);
+    heroScreen.emissiveIntensity=heroScreen.userData.baseEI*flick;
+    heroGlow.intensity=7.0*flick;
+    const hMdl=hero.userData.model;
+    if(hMdl) hMdl.rotation.x=0.012*Math.sin(now*0.0016);                     // gentle breathing on the seated model
     if(mycDirty||live){ updateMycTex(); mycDirty=false; }
     if(crtDirty||(live&&crtActive)){ updateCrtTex(); crtDirty=false; }
     // reaction-diffusion cap patterns: advance the shared sim only when a specimen uses it (§8b)
@@ -1989,6 +2201,7 @@ addEventListener('resize',()=>{
   renderer.setSize(innerWidth,innerHeight);
   composer.setSize(innerWidth,innerHeight);
   bloom.setSize(innerWidth*0.5,innerHeight*0.5);
+  ditherPass.uniforms.uResolution.value.set(innerWidth,innerHeight);
   if(gtao) gtao.setSize(innerWidth,innerHeight);
   needsRender=true;
 });
@@ -1997,7 +2210,8 @@ addEventListener('resize',()=>{
  * 16. PERSISTENCE
  * ============================================================= */
 function serialize(){
-  return { genome, presets, audioWanted, dayLen:world.dayLen, mycReach, mycBranch, wandererOn, ditherAmt:ditherPass.uniforms.uAmount.value, aoOn, garden: garden.map(m=>({
+  return { genome, presets, audioWanted, dayLen:world.dayLen, mycReach, mycBranch, softPop, wandererOn, ditherAmt:ditherPass.uniforms.uAmount.value, aoOn,
+    styleMode, fogAuto, fogAmt:ditherPass.uniforms.uTintAmt.value, fogColor:'#'+ditherPass.uniforms.uTint.value.getHexString(), garden: garden.map(m=>({
     genome:m.genome, position:m.group.position.toArray(), rotation:m.group.rotation.y,
     baseScale:m.baseScale, age:m.age })) };
 }
@@ -2015,10 +2229,18 @@ function hydrate(data){
     if(el){ el.value=mycReach; document.getElementById('vSpread').textContent=mycReach; } }
   if(typeof data.mycBranch==='number'){ mycBranch=data.mycBranch; const el=document.getElementById('branch');
     if(el){ el.value=mycBranch; document.getElementById('vBranch').textContent=mycBranch.toFixed(3); } }
+  if(typeof data.softPop==='number'){ softPop=data.softPop; const el=document.getElementById('density');
+    if(el){ el.value=softPop; document.getElementById('vDensity').textContent=softPop; } }
   wandererOn=!!data.wandererOn; if(wandererOn) crtSpawnTimer=99; syncWandererBtn();
   if(typeof data.ditherAmt==='number'){ ditherPass.uniforms.uAmount.value=data.ditherAmt; const el=document.getElementById('dither');
     if(el){ el.value=data.ditherAmt; document.getElementById('vDither').textContent=data.ditherAmt.toFixed(3); } }
   if(typeof data.aoOn==='boolean'){ aoOn=data.aoOn; if(gtao) gtao.enabled=aoOn; syncAoBtn(); }
+  if(typeof data.styleMode==='number') setStyle(data.styleMode);
+  if(typeof data.fogAmt==='number'){ ditherPass.uniforms.uTintAmt.value=data.fogAmt;
+    const el=document.getElementById('fog'); if(el){ el.value=data.fogAmt; document.getElementById('vFog').textContent=data.fogAmt.toFixed(2); } }
+  if(data.fogColor){ ditherPass.uniforms.uTint.value.set(data.fogColor);
+    const el=document.getElementById('fogColor'); if(el) el.value=data.fogColor; }
+  if(typeof data.fogAuto==='boolean') fogAuto=data.fogAuto;
   audioWanted=!!data.audioWanted;
   garden.forEach(m=>m.dispose()); garden.length=0;
   (data.garden||[]).forEach(s=>{
@@ -2036,7 +2258,7 @@ function seedDemoGarden(){
   for(let i=0;i<7;i++){
     const p=picks[(Math.random()*picks.length)|0];
     const g=Object.assign(defaultGenome(),cloneGenome(p.genome)); g.seed=(Math.random()*1e9)|0;
-    const ang=Math.random()*Math.PI*2, r=2+Math.random()*9;
+    const ang=Math.random()*Math.PI*2, r=3.4+Math.random()*8;
     const pos=new THREE.Vector3(Math.cos(ang)*r,0,Math.sin(ang)*r);
     if(garden.some(m=>m.group.position.distanceTo(pos)<MIN_SPACING)) continue;
     garden.push(new Mushroom(g,pos,{age:Math.random()*g.lifespan*0.55}));
@@ -2053,8 +2275,15 @@ addEventListener('keydown',e=>{ resetIdle();
 buildPanel();
 buildPresetChips();
 let saved=null; try{ saved=JSON.parse(localStorage.getItem(SAVE_KEY)); }catch(e){}
-if(saved){ hydrate(saved); if(!(saved.garden&&saved.garden.length)) seedDemoGarden(); }
-else { seedDemoGarden(); rebuildPreview(); }
+try{
+  if(saved){ hydrate(saved); if(!(saved.garden&&saved.garden.length)) seedDemoGarden(); }
+  else { seedDemoGarden(); rebuildPreview(); }
+}catch(e){
+  // never let a corrupt/old save blank the whole app — log it, drop the save, start fresh
+  console.error('Mycelia: restore failed, starting a fresh garden →', e);
+  try{ localStorage.removeItem(SAVE_KEY); }catch(_){}
+  try{ resetFields(); garden.forEach(m=>m.dispose()); garden.length=0; seedDemoGarden(); rebuildPreview(); }catch(_){}
+}
 setMode('garden');
 // restore sound intent — but the AudioContext can only start on a user gesture
 const _audioBtn=document.getElementById('audioBtn'); _audioBtn.textContent='🔇';
