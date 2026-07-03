@@ -1635,7 +1635,7 @@ function fishPos(s,u,out){ return out.set(Math.sin(u)*s.Rx, s.H+Math.sin(u*1.6)*
 // ── AMAZING WHALE — a giant low-poly whale drifting through the far background, in and out sporadically ──
 function buildWhale(){
   const g=new THREE.Group();
-  const mat=new THREE.MeshStandardMaterial({color:0x1c2c3c,emissive:0x0a2333,emissiveIntensity:0.4,roughness:0.7,metalness:0.1,flatShading:true,side:THREE.DoubleSide,transparent:true,opacity:0});
+  const mat=new THREE.MeshStandardMaterial({color:0x24384c,emissive:0x123a52,emissiveIntensity:1.0,roughness:0.7,metalness:0.1,flatShading:true,side:THREE.DoubleSide,transparent:true,opacity:0});
   const tri=(p)=>{ const b=new THREE.BufferGeometry(); b.setAttribute('position',new THREE.Float32BufferAttribute(p,3)); b.computeVertexNormals(); return b; };
   const body=new THREE.Mesh(new THREE.IcosahedronGeometry(1,2),mat); body.scale.set(1.1,1.4,4.4); g.add(body);
   const head=new THREE.Mesh(new THREE.IcosahedronGeometry(0.9,1),mat); head.scale.set(1.0,1.1,1.4); head.position.z=-3.6; g.add(head);
@@ -1644,17 +1644,18 @@ function buildWhale(){
   fluke.add(new THREE.Mesh(tri([0,0,0, -2.6,0.3,1.4, -0.2,0,1.8]),mat));
   const pecL=new THREE.Mesh(tri([0,0,0, 2.8,-0.6,1.6, 0.3,-0.2,2.0]),mat); pecL.position.set(0.8,-0.5,-1.0); g.add(pecL);
   const pecR=new THREE.Mesh(tri([0,0,0, -2.8,-0.6,1.6, -0.3,-0.2,2.0]),mat); pecR.position.set(-0.8,-0.5,-1.0); g.add(pecR);
-  g.scale.setScalar(1.9); g.userData={mat,fluke};
+  g.scale.setScalar(2.1); g.userData={mat,fluke};
   return g;
 }
 const whale=buildWhale(); whale.visible=false; scene.add(whale);
-let whaleActive=false, whaleT=0, whaleWait=6, whaleDir=1, whaleZ=-44, whaleY=12;
+let whaleActive=false, whaleT=0, whaleWait=5, whaleDir=1, whaleZ=-30, whaleY=9;
 
 // ── WANDERER CREATURE — a roaming metaball (4 blobs, one pulsing 2–3×) riding the Lenia soliton ──
 const beastMat=new THREE.MeshStandardMaterial({color:0x2a1c08,emissive:0xffb14a,emissiveIntensity:2.2,roughness:0.3,metalness:0.0});
 const beast=new MarchingCubes(48,beastMat,true,false,40000);   // higher res → smooth surface
 beast.isolation=60; beast.scale.setScalar(1.4); beast.visible=false; scene.add(beast);
 const wanderPos=new THREE.Vector3(0,1.7,0), _beastTgt=new THREE.Vector3(0,1.7,0);
+const beastVel=new THREE.Vector3(), _acc=new THREE.Vector3(), _tmpv=new THREE.Vector3();
 
 // shared reaction-diffusion texture sampled by every cap shader (§8b)
 seedRD();
@@ -2450,8 +2451,20 @@ function animate(now){
     // wanderer creature — a roaming metaball riding the Lenia soliton (4 blobs, one pulsing 2–3×)
     if(wandererOn && crtActive){
       const bt=now*0.001; beast.visible=true;
-      _beastTgt.set(wanderPos.x, 1.7+0.2*Math.sin(bt*0.7), wanderPos.z);
-      beast.position.lerp(_beastTgt, 0.012);          // slow, smooth glide — reads as an unhurried creature
+      // physics: gently seek the soliton, but repel from the gardener + mushrooms + plants (collision avoidance)
+      _beastTgt.set(wanderPos.x, 0, wanderPos.z);
+      _acc.set(0,0,0);
+      _tmpv.set(_beastTgt.x-beast.position.x, 0, _beastTgt.z-beast.position.z);
+      if(_tmpv.lengthSq()>0.0001){ _tmpv.normalize(); _acc.addScaledVector(_tmpv, 2.2); }   // seek
+      const repel=(cx,cz,rad,str)=>{ const dx=beast.position.x-cx, dz=beast.position.z-cz, d=Math.hypot(dx,dz)||1e-3;
+        if(d<rad){ const f=(1-d/rad)*str; _acc.x+=dx/d*f; _acc.z+=dz/d*f; } };
+      repel(0,0,3.4,11);                                     // the gardener
+      for(const m of garden) repel(m.group.position.x,m.group.position.z,1.8,7);
+      for(const p of plants) repel(p.group.position.x,p.group.position.z,1.3,6);
+      beastVel.addScaledVector(_acc, realDt); beastVel.multiplyScalar(0.93); beastVel.clampLength(0,3.0);  // damped, slow
+      beast.position.x=clamp(beast.position.x+beastVel.x*realDt,-GROUND_HALF+1,GROUND_HALF-1);
+      beast.position.z=clamp(beast.position.z+beastVel.z*realDt,-GROUND_HALF+1,GROUND_HALF-1);
+      beast.position.y=1.9+0.2*Math.sin(bt*0.7);             // hover above the ground, clear of the caps
       beast.reset();
       const big=1.0+1.5*(0.5+0.5*Math.sin(bt*0.32));  // one blob swells ~1×→2.5× on a slow pulse
       beast.addBall(0.5+0.10*Math.sin(bt*0.8), 0.5+0.08*Math.cos(bt*0.7), 0.5+0.10*Math.sin(bt*0.55), 0.42*big, 12);
@@ -2467,13 +2480,13 @@ function animate(now){
       if(p>=1){ whaleActive=false; whale.visible=false; whaleWait=16+Math.random()*34; }
       else {
         whale.visible=true;
-        whale.position.set(lerp(-80,80,p)*whaleDir, whaleY+Math.sin(p*Math.PI*2.5)*2.2, whaleZ);
+        whale.position.set(lerp(-58,58,p)*whaleDir, whaleY+Math.sin(p*Math.PI*2.5)*2.2, whaleZ);
         whale.rotation.y=whaleDir>0?-Math.PI/2:Math.PI/2;
         whale.rotation.z=Math.sin(whaleT*0.5)*0.06;
         whale.userData.fluke.rotation.x=Math.sin(whaleT*1.1)*0.28;
-        whale.userData.mat.opacity=smoothstep(0,0.14,p)*(1-smoothstep(0.86,1,p))*0.92;
+        whale.userData.mat.opacity=smoothstep(0,0.14,p)*(1-smoothstep(0.86,1,p));
       }
-    } else { whaleWait-=realDt; if(whaleWait<=0){ whaleActive=true; whaleT=0; whaleDir=Math.random()<0.5?1:-1; whaleZ=-40-Math.random()*22; whaleY=9+Math.random()*9; } }
+    } else { whaleWait-=realDt; if(whaleWait<=0){ whaleActive=true; whaleT=0; whaleDir=Math.random()<0.5?1:-1; whaleZ=-26-Math.random()*13; whaleY=7+Math.random()*6; } }
     // flying salmon — travel a slow loop, nose leads (lookAt), tail wags, gentle bank
     for(const f of fishes){ const s=f.userData.spec, u=now*0.001*s.sp+s.ph;
       fishPos(s,u,_fp); fishPos(s,u+0.03,_fn);
