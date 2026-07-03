@@ -30,10 +30,10 @@ In the GitHub repo:
 
 1. Go to **Settings**
 2. Open **Pages** from the sidebar
-3. Under **Build and deployment**, set **Source** to **Deploy from a branch**
-4. Choose branch: **main**
-5. Choose folder: **/** root
-6. Save
+3. Under **Build and deployment**, set **Source** to **GitHub Actions**
+4. Save
+
+This repository includes a GitHub Actions workflow that publishes only the static site files needed for Pages.
 
 Your site will publish at something like:
 
