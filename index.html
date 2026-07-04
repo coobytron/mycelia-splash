@@ -45,13 +45,6 @@
     background:radial-gradient(circle, rgba(53,224,216,.18), rgba(53,224,216,0) 72%);filter:blur(14px);}
   .splash-copy::after{width:140px;height:140px;left:38%;bottom:10px;
     background:radial-gradient(circle, rgba(130,255,242,.15), rgba(130,255,242,0) 72%);filter:blur(8px);}
-  .splash-eyebrow{
-    display:inline-flex;align-items:center;gap:10px;margin:0 0 18px;padding:8px 12px 8px 10px;
-    color:#c1f8f4;font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;
-    border:1px solid rgba(255,255,255,.12);border-radius:999px;background:rgba(6,12,16,.24);
-    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  }
-  .splash-eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 16px var(--accent);}
   .splash-title{
     max-width:780px;margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
     font-size:clamp(42px,8vw,94px);line-height:.98;letter-spacing:-.02em;font-weight:600;font-kerning:normal;
@@ -165,6 +158,11 @@
   #toast{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:30;
     font-size:12px;font-weight:600;color:#fff;background:#0a84ffee;padding:8px 16px;
     border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none;}
+  #needs{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 16px);transform:translateX(-50%);z-index:16;
+    font-size:12.5px;font-weight:600;color:#e2f0ea;background:#0b1416cc;padding:8px 16px;border-radius:999px;
+    border:1px solid var(--line);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:none;
+    transition:opacity .5s;max-width:calc(100vw - 32px);text-align:center;}
+  body.hideui #needs{opacity:0;}
 
   /* cinematic vignette */
   #vignette{position:fixed;inset:0;z-index:8;pointer-events:none;
@@ -174,6 +172,8 @@
   #panel,#hint{transition:opacity .8s ease;}
   body.gallery #panel,body.gallery #hint,
   body.hideui #panel,body.hideui #hint{opacity:0;pointer-events:none;}
+  /* present mode (P key): everything hidden but the scene + hero title */
+  body.present #panel,body.present #panelToggle,body.present #hint,body.present #needs,body.present #toast{opacity:0!important;pointer-events:none;}
 
   /* brand-row audio toggle */
   .brand .spacer{flex:1;}
@@ -212,6 +212,7 @@
 </section>
 
 <div id="hint">Garden mode — tap the ground to plant the current mushroom</div>
+<div id="needs"></div>
 <div id="toast"></div>
 
 <button class="iconbtn" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" title="Toggle controls">☰ Controls</button>
@@ -268,7 +269,10 @@
     <div class="btns">
       <div class="btn" id="pauseBtn">Pause</div>
       <div class="btn" id="newSeedBtn">New Seed</div>
-      <div class="btn" id="clearBtn">Clear</div>
+    </div>
+    <div class="btns">
+      <div class="btn" id="clearBtn">Reset</div>
+      <div class="btn" id="emptyBtn">Clear</div>
     </div>
     <div class="btns">
       <div class="btn" id="wandererBtn">Wanderer: Off</div>
@@ -446,10 +450,16 @@ function noise2D(x,z){
   const ix=Math.floor(x),iz=Math.floor(z),fx=x-ix,fz=z-iz;
   return lerp(lerp(h(ix,iz),h(ix+1,iz),s(fx)),lerp(h(ix,iz+1),h(ix+1,iz+1),s(fx)),s(fz));
 }
+// per-refresh world seed → a large domain OFFSET (artifact-free) so hills differ every load
+const WORLD_SEED=(Math.random()*1e9)>>>0;
+const _wseed=mulberry32(WORLD_SEED);
+const OFF_X=_wseed()*1000-500, OFF_Z=_wseed()*1000-500, WARP=3.2;
+function fbmH(x,z){ return noise2D(x*.11,z*.11)*.65+noise2D(x*.24,z*.24)*.22+noise2D(x*.55,z*.55)*.07; }
 function getHeightAt(x,z){
   const nx=x/GROUND_HALF,nz=z/GROUND_HALF,r2=nx*nx+nz*nz;
-  const edge=Math.max(0,1-r2*r2);
-  const h=noise2D(x*.11,z*.11)*.65+noise2D(x*.24,z*.24)*.22+noise2D(x*.55,z*.55)*.07;
+  const edge=Math.max(0,1-r2*r2);                       // circular clearing (keyed on untouched x,z)
+  const wx=fbmH(x+OFF_X+5.2,z+OFF_Z+1.3), wz=fbmH(x+OFF_X+2.8,z+OFF_Z+9.1);   // domain warp → organic winding hills
+  const h=fbmH(x+OFF_X+WARP*wx, z+OFF_Z+WARP*wz);
   return clamp(h*edge*1.1,0,1.15);
 }
 function buildTerrainGeo(W,D,sx,sz){
@@ -938,6 +948,7 @@ class Mushroom {
     this.baseScale = opts.baseScale ?? (0.6+Math.random()*0.5);
     this.age = opts.age ?? 0;
     this.swayPhase = Math.random()*Math.PI*2;
+    this.lean = new THREE.Vector2(); this.leanV = new THREE.Vector2();   // light-collider spring (bends away from the wanderer)
     this.lastSpore = this.age;
     this.stage = STAGE.EMERGE;
     this.group.scale.setScalar(0.001);
@@ -1005,9 +1016,19 @@ class Mushroom {
     this.group.scale.setScalar(Math.max(0.0001,grown*decayScale));
     this.group.position.y=this.basePosY+yOff;
 
-    // idle sway
+    // light collider: bend away when the wanderer creature brushes past, then spring upright
+    if(wandererOn && crtActive){
+      const dx=this.group.position.x-wanderPos.x, dz=this.group.position.z-wanderPos.z, d2=dx*dx+dz*dz;
+      if(d2<2.6*2.6){ const d=Math.sqrt(d2)||1e-3, f=(1-d/2.6)*2.4*dt; this.leanV.x+=dx/d*f; this.leanV.y+=dz/d*f; }
+    }
+    this.leanV.x+=-16*this.lean.x*dt; this.leanV.y+=-16*this.lean.y*dt;   // spring toward upright
+    this.leanV.multiplyScalar(0.86);                                       // damping
+    this.lean.x+=this.leanV.x*dt; this.lean.y+=this.leanV.y*dt; this.lean.clampLength(0,0.5);
+
+    // idle sway + collider lean
     if(this.stage>=STAGE.GROWING && this.stage<=STAGE.AGING)
-      this.group.rotation.z=Math.sin(simClock.t*0.8+this.swayPhase)*0.02;
+      this.group.rotation.z=Math.sin(simClock.t*0.8+this.swayPhase)*0.02 - this.lean.x;
+    this.group.rotation.x=this.lean.y;
 
     // reproduction (MATURE only)
     if(this.stage===STAGE.MATURE && a-this.lastSpore>SPORE_INTERVAL){
@@ -1017,7 +1038,6 @@ class Mushroom {
 
   sporulate(){
     this.group.userData.parts.cap.getWorldPosition(_v);
-    particles.burst(_v, 48, this.genome.glowColor);
     audioBell(this.genome.capRadius, this.group.position.x);   // reactive sound
     if(Math.random()>this.genome.fertility) return;
     // disperse spores -> inoculate the mycelium field around the parent (reproduction is now field-driven)
@@ -1339,66 +1359,9 @@ function updateCrtTex(){
 }
 
 /* ============================================================= *
- * 10. PARTICLE SYSTEM (spore motes)
+ * 10. (removed) — the ParticleSystem was inert: spore/dust Points flickered under
+ *     depth-of-field (they don't write depth), so it was disabled and is now deleted.
  * ============================================================= */
-class ParticleSystem {
-  constructor(scene, max=1400, ambient=0){   // ambient dust removed — Points don't write depth, so DoF flickered them every frame
-    this.max=max; this.ambient=ambient;
-    this.pos=new Float32Array(max*3);
-    this.vel=new Float32Array(max*3);
-    this.col=new Float32Array(max*3);
-    this.life=new Float32Array(max);
-    const geo=new THREE.BufferGeometry();
-    geo.setAttribute('position',new THREE.BufferAttribute(this.pos,3).setUsage(THREE.DynamicDrawUsage));
-    geo.setAttribute('color',   new THREE.BufferAttribute(this.col,3).setUsage(THREE.DynamicDrawUsage));
-    const mat=new THREE.PointsMaterial({size:0.055,map:makeSoftDot(),transparent:true,
-      opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false,vertexColors:true,
-      sizeAttenuation:true});
-    this.points=new THREE.Points(geo,mat); this.points.frustumCulled=false;
-    this.geo=geo; scene.add(this.points);
-    const c=new THREE.Color('#2fd8d0');
-    for(let k=0;k<ambient;k++){
-      const i=k*3;
-      this.pos[i]=(Math.random()-0.5)*40; this.pos[i+1]=Math.random()*7; this.pos[i+2]=(Math.random()-0.5)*40;
-      this.vel[i+1]=0.06+Math.random()*0.08;
-      const cc=c.clone().offsetHSL((Math.random()-0.5)*0.1,0,(Math.random()-0.5)*0.2);
-      this.col[i]=cc.r; this.col[i+1]=cc.g; this.col[i+2]=cc.b;
-      this.life[k]=Infinity;
-    }
-    this.geo.attributes.color.needsUpdate=true;
-  }
-  burst(at,n,hex){
-    return;   // spore/water puffs disabled — Points don't write depth, so they flicker under depth-of-field
-    const c=new THREE.Color(hex); let placed=0;
-    for(let k=this.ambient;k<this.max && placed<n;k++){
-      if(this.life[k]>0) continue;
-      const i=k*3;
-      this.pos[i]=at.x; this.pos[i+1]=at.y; this.pos[i+2]=at.z;
-      const a=Math.random()*Math.PI*2;
-      this.vel[i]=Math.cos(a)*0.35; this.vel[i+1]=0.3+Math.random()*0.7; this.vel[i+2]=Math.sin(a)*0.35;
-      this.col[i]=c.r; this.col[i+1]=c.g; this.col[i+2]=c.b;
-      this.life[k]=2.2+Math.random()*2.2; placed++;
-    }
-    this.geo.attributes.color.needsUpdate=true;
-  }
-  update(dt){
-    for(let k=0;k<this.max;k++){
-      const i=k*3;
-      if(k<this.ambient){
-        this.pos[i]+=Math.sin(simClock.t*0.25+k)*0.004;
-        this.pos[i+1]+=this.vel[i+1]*dt;
-        if(this.pos[i+1]>7.5) this.pos[i+1]=0;
-        continue;
-      }
-      if(this.life[k]<=0){ if(this.pos[i+1]>-900){this.pos[i+1]=-9999;} continue; }
-      this.life[k]-=dt;
-      this.vel[i+1]-=0.12*dt;
-      this.pos[i]+=this.vel[i]*dt; this.pos[i+1]+=this.vel[i+1]*dt; this.pos[i+2]+=this.vel[i+2]*dt;
-      if(this.life[k]<=0) this.pos[i+1]=-9999;
-    }
-    this.geo.attributes.position.needsUpdate=true;
-  }
-}
 
 /* ============================================================= *
  * 11. SCENE / LIGHTS / BLOOM
@@ -1419,6 +1382,23 @@ const DAY_HEMI=new THREE.Color(0x5a90dc), NIGHT_HEMI=new THREE.Color(0x143a44);
 const scene=new THREE.Scene();
 scene.background=NIGHT_BG.clone();
 scene.fog=new THREE.FogExp2(0x08222c,0.05);   // colored + a touch denser → the whole garden reads as in soft fog
+
+// ── ATMOSPHERE SKY DOME — gradient sky + soft scattering halo around the sun/moon (from the planet article) ──
+const skyUniforms={
+  uHorizon:{value:new THREE.Color(0x08222c)}, uZenith:{value:new THREE.Color(0x02040a)},
+  uLightDir:{value:new THREE.Vector3(0,1,0)}, uLightColor:{value:new THREE.Color(0x9fc4ff)} };
+const skyDome=new THREE.Mesh(new THREE.SphereGeometry(72,32,16), new THREE.ShaderMaterial({
+  uniforms:skyUniforms, side:THREE.BackSide, depthWrite:false, depthTest:false, fog:false,
+  vertexShader:`varying vec3 vDir; void main(){ vDir=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`precision highp float; varying vec3 vDir; uniform vec3 uHorizon,uZenith,uLightDir,uLightColor;
+    void main(){
+      float h=clamp(vDir.y*1.3+0.12,0.0,1.0);              // 0 horizon → 1 zenith
+      vec3 sky=mix(uHorizon,uZenith,h);
+      float s=max(0.0,dot(normalize(vDir),normalize(uLightDir)));
+      sky+=uLightColor*(pow(s,10.0)*0.7 + pow(s,2.5)*0.12); // scattering halo around the luminary
+      gl_FragColor=vec4(sky,1.0);
+    }` }));
+skyDome.renderOrder=-1000; skyDome.frustumCulled=false; scene.add(skyDome);
 
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,300);
 camera.position.set(0,9,15);
@@ -1653,9 +1633,10 @@ let whaleActive=false, whaleT=0, whaleWait=5, whaleDir=1, whaleZ=-30, whaleY=9;
 // ── WANDERER CREATURE — a roaming metaball (4 blobs, one pulsing 2–3×) riding the Lenia soliton ──
 const beastMat=new THREE.MeshStandardMaterial({color:0x2a1c08,emissive:0xffb14a,emissiveIntensity:2.2,roughness:0.3,metalness:0.0});
 const beast=new MarchingCubes(48,beastMat,true,false,40000);   // higher res → smooth surface
-beast.isolation=60; beast.scale.setScalar(1.4); beast.visible=false; scene.add(beast);
+beast.isolation=60; beast.scale.setScalar(2.2); beast.visible=false; scene.add(beast);   // bigger — a proper creature
 const wanderPos=new THREE.Vector3(0,1.7,0), _beastTgt=new THREE.Vector3(0,1.7,0);
 const beastVel=new THREE.Vector3(), _acc=new THREE.Vector3(), _tmpv=new THREE.Vector3();
+let beastHunger=0.35;   // the wanderer is a pet: hunger rises over time, feed it by watering nearby
 
 // shared reaction-diffusion texture sampled by every cap shader (§8b)
 seedRD();
@@ -1713,7 +1694,7 @@ class CinematicBokehPass extends Pass {
     });
     this.fsQuad=new FullScreenQuad(this.material);
   }
-  setSize(w,h){ this.depthRT.setSize(w,h); this.uniforms.uTexel.value.set(1/w,1/h); }
+  setSize(w,h){ this.depthRT.setSize(Math.max(1,w>>1),Math.max(1,h>>1)); this.uniforms.uTexel.value.set(1/w,1/h); }  // half-res depth (blur is low-freq)
   render(renderer, writeBuffer, readBuffer){
     const prevRT=renderer.getRenderTarget();
     renderer.setRenderTarget(this.depthRT); renderer.clear();   // 1) capture current scene depth
@@ -1827,7 +1808,6 @@ import('three/addons/objects/Reflector.js').then(({Reflector})=>{
   }catch(e){ console.warn('Wet floor setup failed:',e); wetFloor=null; }
 }).catch(e=>console.warn('Reflector unavailable:',e));
 
-const particles=new ParticleSystem(scene);
 const garden=[];
 
 /* ============================================================= *
@@ -2020,8 +2000,10 @@ const CAM={ edit:{pos:new THREE.Vector3(0,1.6,4.2),tgt:new THREE.Vector3(0,1.0,0
 let camTarget=CAM.garden;
 let camAnimating=false;
 // cinematic idle camera — breathing 3/4-front orbit on the gardener when untouched
-let cineActive=false, cineT=0;
-const _cinePos=new THREE.Vector3(), CINE_TARGET=new THREE.Vector3(0,1.0,0), CINE_IDLE=2.5;
+let cineT=0;
+let cineMode='orbit', cineModeT=0, cineModeDur=14;   // director: orbit the gardener, sometimes go follow the wanderer
+let presentMode=false;                                // P key: clean hands-free cinematic reveal
+const _cinePos=new THREE.Vector3(), _cineFocus=new THREE.Vector3(), CINE_TARGET=new THREE.Vector3(0,1.0,0), CINE_IDLE=2.5;
 controls.addEventListener('start',()=>{ camAnimating=false; }); // hand off to user on interaction
 
 // buttons
@@ -2038,7 +2020,8 @@ densityEl.addEventListener('input',()=>{ softPop=parseInt(densityEl.value); vDen
 const pauseBtn=document.getElementById('pauseBtn');
 pauseBtn.onclick=()=>{ simClock.paused=!simClock.paused; pauseBtn.textContent=simClock.paused?'Resume':'Pause'; pauseBtn.classList.toggle('primary',simClock.paused); };
 document.getElementById('newSeedBtn').onclick=()=>{ genome.seed=(Math.random()*1e9)|0; rebuildPreview(); scheduleSave(); };
-document.getElementById('clearBtn').onclick=()=>{ garden.forEach(m=>m.dispose()); garden.length=0; plants.forEach(p=>p.dispose()); plants.length=0; resetFields(); scheduleSave(); needsRender=true; };
+document.getElementById('clearBtn').onclick=()=>{ garden.forEach(m=>m.dispose()); garden.length=0; plants.forEach(p=>p.dispose()); plants.length=0; resetFields(); seedDemoGarden(); scheduleSave(); needsRender=true; };
+document.getElementById('emptyBtn').onclick=()=>{ garden.forEach(m=>m.dispose()); garden.length=0; plants.forEach(p=>p.dispose()); plants.length=0; resetFields(); scheduleSave(); needsRender=true; };  // Clear = empty (Reset reseeds)
 const wandererBtn=document.getElementById('wandererBtn');
 function syncWandererBtn(){ wandererBtn.textContent='Wanderer: '+(wandererOn?'On (💧 water to steer)':'Off'); wandererBtn.classList.toggle('glow',wandererOn); }
 wandererBtn.onclick=()=>{ wandererOn=!wandererOn; crtSpawnTimer=99; syncWandererBtn(); scheduleSave(); needsRender=true; };
@@ -2150,16 +2133,16 @@ function initAudio(){
   const Ctx=window.AudioContext||window.webkitAudioContext; if(!Ctx) return null;
   const ctx=new Ctx();
   const master=ctx.createGain(); master.gain.value=0;
-  const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=900; lp.Q.value=0.5;
+  const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=720; lp.Q.value=0.4;
   const reverb=ctx.createConvolver(); reverb.buffer=makeImpulse(ctx,4.5,3.0);
   const wet=ctx.createGain(); wet.gain.value=0.6;
   lp.connect(master); lp.connect(reverb); reverb.connect(wet); wet.connect(master); master.connect(ctx.destination);
   const lfo=ctx.createOscillator(), lfoG=ctx.createGain(); lfo.frequency.value=0.05; lfoG.gain.value=340;
   lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start();           // slow filter sweep = breathing
-  const drone=ctx.createGain(); drone.gain.value=0.10; drone.connect(lp);
+  const drone=ctx.createGain(); drone.gain.value=0.075; drone.connect(lp);
   [0,7,-5].forEach((semi,i)=>{ const o=ctx.createOscillator(); o.type='sawtooth';
     o.frequency.value=110*Math.pow(2,semi/12); o.detune.value=(i-1)*5;
-    const g=ctx.createGain(); g.gain.value=0.33; o.connect(g); g.connect(drone); o.start(); });
+    const g=ctx.createGain(); g.gain.value=0.26; o.connect(g); g.connect(drone); o.start(); });
   audio={ctx,master,lp,reverb,drone,on:false};
   scheduleNote();
   return audio;
@@ -2169,13 +2152,13 @@ function pluck(freq,dur=6){
   const o=ctx.createOscillator(); o.type='sine'; o.frequency.value=freq; o.detune.value=(Math.random()-.5)*8;
   const g=ctx.createGain(); g.gain.value=0; o.connect(g); g.connect(lp);
   const t=ctx.currentTime;
-  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.16,t+2.0); g.gain.linearRampToValueAtTime(0,t+dur);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.11,t+2.6); g.gain.linearRampToValueAtTime(0,t+dur);
   o.start(t); o.stop(t+dur+0.1);
 }
 function scheduleNote(){
   if(!audio) return;
   if(audio.on) pluck(SCALE[(Math.random()*SCALE.length)|0]);
-  setTimeout(scheduleNote, 5000+Math.random()*6000);
+  setTimeout(scheduleNote, 8000+Math.random()*8000);
 }
 // reactive: a soft bell when a mushroom sporulates / is planted (pitch from cap size, pan from x)
 function audioBell(capR, x){
@@ -2187,13 +2170,13 @@ function audioBell(capR, x){
   if(ctx.createStereoPanner){ const pan=ctx.createStereoPanner(); pan.pan.value=clamp(x/GROUND_HALF,-1,1);
     g.connect(pan); pan.connect(reverb); pan.connect(lp); } else { g.connect(reverb); g.connect(lp); }
   const t=ctx.currentTime;
-  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.12,t+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t+3.2);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.085,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+3.4);
   o.start(t); o2.start(t); o.stop(t+3.3); o2.stop(t+3.3);
 }
 function setAudio(on){
   audioWanted=on;
   const btn=document.getElementById('audioBtn'); btn.textContent=on?'🔊':'🔇'; btn.classList.toggle('on',on);
-  if(on){ const a=initAudio(); if(a){ if(a.ctx.resume) a.ctx.resume(); a.on=true; a.master.gain.linearRampToValueAtTime(0.28,a.ctx.currentTime+2); } }
+  if(on){ const a=initAudio(); if(a){ if(a.ctx.resume) a.ctx.resume(); a.on=true; a.master.gain.linearRampToValueAtTime(0.2,a.ctx.currentTime+3); } }
   else if(audio){ audio.on=false; audio.master.gain.linearRampToValueAtTime(0,audio.ctx.currentTime+0.6); }
   scheduleSave();
 }
@@ -2259,9 +2242,11 @@ function nourishAt(point){
     const mi=mycIdx(mx,mz); substrate[mi]=Math.min(1,substrate[mi]+.4);
   });
   if(wandererOn) attractWanderer(point.x, point.z);
+  if(wandererOn && crtActive && Math.hypot(point.x-wanderPos.x,point.z-wanderPos.z)<4.5){
+    beastHunger=Math.max(0, beastHunger-0.5); toast('🫧 Fed the wanderer');   // water near the creature to feed it
+  }
   // visible feedback: blue splash + an expanding blue ripple in the mycelium layer
   waterRings.push({cx:cx|0,cz:cz|0,startT:simClock.t});
-  particles.burst(new THREE.Vector3(point.x,point.y+0.25,point.z), 34, '#6fd2ff');
   toast(watered?`💧 Nourished ${watered} plant${watered>1?'s':''}`:'💧 Watered the soil');
   mycDirty=true; needsRender=true;
 }
@@ -2277,7 +2262,6 @@ function plantAt(point){
     inoculate(point.x, point.z, genome, 0.4);
     audioBell(0.6, point.x);
   }
-  particles.burst(new THREE.Vector3(point.x,point.y+0.45,point.z), 28, genome.glowColor);
   scheduleSave(); needsRender=true;
 }
 function handleGardenTap(e){
@@ -2335,6 +2319,7 @@ const simClock={ t:0, speed:1, paused:false };
 const SIM_DT=1/30;                      // fixed sim tick → framerate-independent
 let acc=0, last=performance.now(), saveAccum=0, idleT=0, gallery=false, needsRender=true, rdFrame=0;
 const popEl=document.getElementById('pop'), todLabel=document.getElementById('todLabel'), todPct=document.getElementById('todPct');
+const needsEl=document.getElementById('needs'); let lastNeeds='';
 
 function resetIdle(){ idleT=0; if(gallery) exitGallery(); }
 function enterGallery(){ gallery=true; document.body.classList.add('gallery'); }   // UI fades; cinematic camera drives the motion
@@ -2366,6 +2351,7 @@ function stepSim(dt){
   for(let i=plants.length-1;i>=0;i--) if(plants[i].health<=0){ plants[i].dispose(); plants.splice(i,1); }
   stepMycelium(dt); stepSubstrate(dt); fruitPass(dt);
   stepWanderer(dt);
+  if(wandererOn && crtActive) beastHunger=Math.min(1, beastHunger + dt*0.022);   // the pet gets hungry over time
   resolveOverlap();
 }
 
@@ -2401,6 +2387,12 @@ function animate(now){
   moonSprite.position.set(-Math.sin(sunA)*14,-sunElev*46,-35);
   moonSprite.material.opacity=Math.max(0,-sunElev)*0.85;
   key.position.set(Math.sin(sunA)*5,Math.max(1.5,sunElev*11),Math.cos(sunA)*3+2);
+  // atmosphere sky dome — horizon matches the ground fog, zenith a darker sky, halo tracks the luminary
+  skyUniforms.uHorizon.value.copy(scene.fog.color);
+  skyUniforms.uZenith.value.copy(scene.background).multiplyScalar(0.55);
+  { const sunUp=sunElev>=0, src=sunUp?sunSprite:moonSprite;
+    skyUniforms.uLightDir.value.copy(src.position).normalize();
+    skyUniforms.uLightColor.value.setRGB(sunUp?1.0:0.55, sunUp?0.72:0.72, sunUp?0.42:1.0); }
   if(godOn){                                            // aim the light shafts at whichever luminary is up
     const src=(sunSprite.material.opacity>=moonSprite.material.opacity)?sunSprite:moonSprite;
     _prj.copy(src.position).project(camera);
@@ -2422,22 +2414,32 @@ function animate(now){
     camera.position.lerp(camTarget.pos,0.06); controls.target.lerp(camTarget.tgt,0.06); camera.lookAt(controls.target);
     if(camera.position.distanceTo(camTarget.pos)<0.08) camAnimating=false;
     moved=true;
-  } else if(appMode==='garden' && idleT>CINE_IDLE){
-    // breathing 3/4-front orbit on the gardener — three slow sines at different periods (never visibly loops), eased
-    cineActive=true; cineT+=realDt;
-    const az=0.30+Math.sin(cineT*0.042)*0.45,     // orbit sway around the front (~±26°), slow
-          dist=10.0+Math.sin(cineT*0.03)*4.5,     // dolly push/pull 5.5–14.5
-          elev=3.3+Math.sin(cineT*0.036+1.2)*1.3; // gentle height bob
-    _cinePos.set(Math.sin(az)*dist, elev, Math.cos(az)*dist);
-    camera.position.lerp(_cinePos,0.015); controls.target.lerp(CINE_TARGET,0.02); camera.lookAt(controls.target);
+  } else if(appMode==='garden' && (idleT>CINE_IDLE || presentMode)){
+    // breathing orbit that occasionally wanders off to follow the creature, then returns to the gardener
+    cineT+=realDt; cineModeT+=realDt;
+    if(cineModeT>cineModeDur){ cineModeT=0;
+      if(cineMode!=='follow' && wandererOn && crtActive && Math.random()<0.55){ cineMode='follow'; cineModeDur=8+Math.random()*6; }
+      else { cineMode='orbit'; cineModeDur=13+Math.random()*10; } }
+    const following=(cineMode==='follow' && wandererOn && crtActive);
+    const cx=following?wanderPos.x:0, cz=following?wanderPos.z:0, fy=following?1.8:1.0;
+    const az=0.30+Math.sin(cineT*0.042)*0.6,                       // wider sway → more "walking around"
+          dist=(following?7.0:10.0)+Math.sin(cineT*0.03)*(following?2.2:4.5),
+          elev=(following?4.0:3.3)+Math.sin(cineT*0.036+1.2)*1.3;
+    _cinePos.set(cx+Math.sin(az)*dist, elev, cz+Math.cos(az)*dist);
+    _cineFocus.set(cx,fy,cz);
+    camera.position.lerp(_cinePos,0.015);   // slow lerp → the camera physically drifts over to follow, then back
+    // handheld — subtle multi-frequency drift, like a person holding the camera
+    camera.position.x+=Math.sin(cineT*1.7)*0.06+Math.sin(cineT*0.9+1.0)*0.04;
+    camera.position.y+=Math.sin(cineT*1.3+2.0)*0.055;
+    camera.position.z+=Math.sin(cineT*1.1+0.5)*0.05;
+    controls.target.x+=Math.sin(cineT*1.5+0.3)*0.02; controls.target.y+=Math.sin(cineT*1.2)*0.015;
+    controls.target.lerp(_cineFocus,0.03); camera.lookAt(controls.target);
     moved=true;
   } else {
-    cineActive=false;
     moved=controls.update();   // user in control (spherical resyncs from current pose → smooth hand-off)
   }
   const live=!simClock.paused;
   if(live||needsRender||camAnimating||moved||gallery){
-    particles.update(realDt);
     mistTex.offset.x+=realDt*0.004; mistTex.offset.y+=realDt*0.0025;
     grassUniforms.uTime.value=now/1000;
     grassUniforms.uNightGlow.value=world.nightGlow;
@@ -2464,6 +2466,13 @@ function animate(now){
       beastVel.addScaledVector(_acc, realDt); beastVel.multiplyScalar(0.93); beastVel.clampLength(0,3.0);  // damped, slow
       beast.position.x=clamp(beast.position.x+beastVel.x*realDt,-GROUND_HALF+1,GROUND_HALF-1);
       beast.position.z=clamp(beast.position.z+beastVel.z*realDt,-GROUND_HALF+1,GROUND_HALF-1);
+      // HARD collider — position-based: push the creature fully out of any overlap + kill inward velocity (no clipping through)
+      const resolve=(cx,cz,minD)=>{ const dx=beast.position.x-cx, dz=beast.position.z-cz, d=Math.hypot(dx,dz);
+        if(d<minD && d>1e-4){ const nx=dx/d, nz=dz/d; beast.position.x=cx+nx*minD; beast.position.z=cz+nz*minD;
+          const vn=beastVel.x*nx+beastVel.z*nz; if(vn<0){ beastVel.x-=vn*nx; beastVel.z-=vn*nz; } } };
+      resolve(0,0,3.6);                                                        // the gardener (big clear zone)
+      for(const m of garden) resolve(m.group.position.x,m.group.position.z, 2.3+m.genome.capRadius*0.4);
+      for(const p of plants)  resolve(p.group.position.x,p.group.position.z, 1.8);
       beast.position.y=1.9+0.2*Math.sin(bt*0.7);             // hover above the ground, clear of the caps
       beast.reset();
       const big=1.0+1.5*(0.5+0.5*Math.sin(bt*0.32));  // one blob swells ~1×→2.5× on a slow pulse
@@ -2472,7 +2481,10 @@ function animate(now){
       beast.addBall(0.5+0.09*Math.sin(bt*1.2), 0.5+0.13*Math.cos(bt*0.8), 0.5+0.12*Math.sin(bt*1.0), 0.30, 12);
       beast.addBall(0.5+0.12*Math.cos(bt*0.7), 0.5+0.09*Math.sin(bt*1.3), 0.5+0.10*Math.cos(bt*0.9), 0.28, 12);
       beast.update();
-      beastMat.emissiveIntensity=(2.0+0.4*Math.sin(bt*1.2))*world.nightGlow;
+      const fed=1-beastHunger;
+      beastMat.emissiveIntensity=(0.5+1.8*fed+0.3*Math.sin(bt*1.2))*world.nightGlow;   // dims when hungry
+      beastMat.emissive.setRGB(0.5+0.5*fed, 0.35+0.34*fed, 0.28+0.14*fed);              // cool/grey hungry → warm gold fed
+      beast.scale.setScalar(2.2*(0.74+0.26*fed));                                        // shrinks a little when hungry
     } else beast.visible=false;
     // background whale — sporadic slow passes, fading in/out at the edges
     if(whaleActive){
@@ -2505,6 +2517,13 @@ function animate(now){
   popEl.textContent=garden.length;
   todLabel.textContent=world.night>0.5?'🌙 Night':'☀️ Day';
   todPct.textContent=Math.round(world.night*100)+'% glow';
+  // needs dialog — surface the most pressing thing the garden/wanderer wants
+  const nt = (wandererOn && crtActive && beastHunger>0.6) ? '🫧 The wanderer is hungry — tap 💧 near it to feed'
+    : plants.some(p=>p.health<0.35) ? '🌿 A plant is wilting — switch to 💧 water mode'
+    : (wandererOn && crtActive && beastHunger<0.25) ? '🫧 The wanderer is content'
+    : (garden.length>=softPop) ? '🍄 The garden is flourishing'
+    : '🌙 Tap the ground to plant · 💧 water to nourish';
+  if(nt!==lastNeeds){ needsEl.textContent=lastNeeds=nt; }
   saveAccum+=realDt; if(saveAccum>5){ saveAccum=0; persist(); }
 }
 
@@ -2574,32 +2593,44 @@ function hydrate(data){
 // first-run: a small living garden so newcomers see the payoff immediately
 function seedDemoGarden(){
   const picks=BUILTIN_PRESETS.filter(p=>p.real).concat(BUILTIN_PRESETS.filter(p=>!p.real).slice(0,3));
-  const spot=()=>{ const ang=Math.random()*Math.PI*2, r=3.4+Math.random()*8, x=Math.cos(ang)*r, z=Math.sin(ang)*r;
-    return new THREE.Vector3(x,getHeightAt(x,z),z); };
-  const clear=p=>garden.every(m=>m.group.position.distanceTo(p)>=MIN_SPACING) && plants.every(pl=>pl.group.position.distanceTo(p)>=MIN_SPACING*0.8);
-  // 4 random mushrooms
-  for(let i=0;i<4;i++){
-    const p=picks[(Math.random()*picks.length)|0];
-    const g=Object.assign(defaultGenome(),cloneGenome(p.genome)); g.seed=(Math.random()*1e9)|0;
-    const pos=spot(); if(!clear(pos)) continue;
-    garden.push(new Mushroom(g,pos,{age:Math.random()*g.lifespan*0.55}));
-    inoculate(pos.x,pos.z,g,0.6);
-  }
-  // a scatter of ferns + flowers (random mix, random flower colours)
   const FLOWER_COLS=['#ff8adf','#a56bff','#6bd0ff','#ffd36b','#ff6b8a','#7bff9d'];
-  const nPlants=4+(Math.random()*3|0);   // 4–6
-  for(let i=0;i<nPlants;i++){
-    const type=Math.random()<0.5?'fern':'flower';
-    const pos=spot(); if(!clear(pos)) continue;
-    const g=cloneGenome(genome);
-    if(type==='flower') g.glowColor=FLOWER_COLS[(Math.random()*FLOWER_COLS.length)|0];
-    plants.push(new Plant(type,g,pos));
-    inoculate(pos.x,pos.z,g,0.3);
+  const clear=p=>p.x*p.x+p.z*p.z>HERO_CLEAR*HERO_CLEAR
+    && garden.every(m=>m.group.position.distanceTo(p)>=MIN_SPACING)
+    && plants.every(pl=>pl.group.position.distanceTo(p)>=MIN_SPACING*0.8);
+  const addOne=(kind,pos)=>{
+    if(kind==='mushroom'){ const p=picks[(Math.random()*picks.length)|0];
+      const g=Object.assign(defaultGenome(),cloneGenome(p.genome)); g.seed=(Math.random()*1e9)|0;
+      garden.push(new Mushroom(g,pos,{age:Math.random()*g.lifespan*0.55})); inoculate(pos.x,pos.z,g,0.6);
+    } else { const g=cloneGenome(genome);
+      if(kind==='flower') g.glowColor=FLOWER_COLS[(Math.random()*FLOWER_COLS.length)|0];
+      plants.push(new Plant(kind,g,pos)); inoculate(pos.x,pos.z,g,0.3); }
+  };
+  // clump seeds — each patch biased to one species (reads as composed patches, not a lawn)
+  const clumps=3+(Math.random()*3|0);   // 3–5 patches, random each refresh
+  for(let c=0;c<clumps;c++){
+    const ca=Math.random()*Math.PI*2, cr=4+Math.random()*11, cx=Math.cos(ca)*cr, cz=Math.sin(ca)*cr;
+    const roll=Math.random(), kind=roll<0.5?'mushroom':(roll<0.78?'fern':'flower');
+    const n=kind==='mushroom'?2+(Math.random()*4|0):2+(Math.random()*3|0);   // clump size
+    for(let i=0;i<n;i++){
+      const ang=Math.random()*Math.PI*2, rad=Math.sqrt(Math.random())*(1.3+Math.random()*1.3);
+      const x=clamp(cx+Math.cos(ang)*rad,-GROUND_HALF+1,GROUND_HALF-1), z=clamp(cz+Math.sin(ang)*rad,-GROUND_HALF+1,GROUND_HALF-1);
+      const pos=new THREE.Vector3(x,getHeightAt(x,z),z); if(clear(pos)) addOne(kind,pos);
+    }
+  }
+  // a few loose specimens for negative-space variety
+  for(let i=0;i<3;i++){
+    const ang=Math.random()*Math.PI*2, r=4+Math.random()*11, x=Math.cos(ang)*r, z=Math.sin(ang)*r;
+    const pos=new THREE.Vector3(x,getHeightAt(x,z),z); if(clear(pos)) addOne(Math.random()<0.7?'mushroom':'fern',pos);
   }
 }
 addEventListener('beforeunload',persist);
 addEventListener('keydown',e=>{ resetIdle();
   if(e.key==='h'||e.key==='H') document.body.classList.toggle('hideui'); });
+// P = present mode: hide all UI + lock the cinematic camera + replay the focus-pull reveal (hands-free)
+addEventListener('keydown',e=>{
+  if(e.key==='p'||e.key==='P'){ presentMode=!presentMode; document.body.classList.toggle('present',presentMode);
+    if(presentMode){ dofIntroT=0; cineT=0; cineModeT=0; cineMode='orbit'; } needsRender=true; }
+});
 
 /* ============================================================= *
  * 17. BOOT
@@ -2609,13 +2640,15 @@ buildPresetChips();
 document.querySelectorAll('#panel .section').forEach(s=>s.classList.add('collapsed'));  // start tidy — headers only
 let saved=null; try{ saved=JSON.parse(localStorage.getItem(SAVE_KEY)); }catch(e){}
 try{
-  if(saved){ hydrate(saved); if(!(saved.garden&&saved.garden.length)) seedDemoGarden(); }
-  else { seedDemoGarden(); rebuildPreview(); }
+  if(saved) hydrate(saved);            // restore settings (mood, toggles, genome) — NOT the garden layout
+  garden.forEach(m=>m.dispose()); garden.length=0;
+  plants.forEach(p=>p.dispose()); plants.length=0;
+  resetFields(); seedDemoGarden(); rebuildPreview();   // a fresh procedural world on every refresh
 }catch(e){
   // never let a corrupt/old save blank the whole app — log it, drop the save, start fresh
   console.error('Mycelia: restore failed, starting a fresh garden →', e);
   try{ localStorage.removeItem(SAVE_KEY); }catch(_){}
-  try{ resetFields(); garden.forEach(m=>m.dispose()); garden.length=0; seedDemoGarden(); rebuildPreview(); }catch(_){}
+  try{ garden.forEach(m=>m.dispose()); garden.length=0; plants.forEach(p=>p.dispose()); plants.length=0; resetFields(); seedDemoGarden(); rebuildPreview(); }catch(_){}
 }
 setMode('garden');
 // restore sound intent — but the AudioContext can only start on a user gesture
